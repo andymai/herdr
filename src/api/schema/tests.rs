@@ -90,6 +90,28 @@ fn workspace_close_group_intent_defaults_false_and_round_trips() {
 }
 
 #[test]
+fn group_requests_round_trip() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "group-create",
+        "method": "group.create",
+        "params": { "name": "Client", "workspace_ids": ["w1"] }
+    }))
+    .unwrap();
+    assert!(matches!(request.method, Method::GroupCreate(_)));
+
+    let assign = Request {
+        id: "group-assign".into(),
+        method: Method::GroupAssign(GroupAssignParams {
+            group_id: "g1".into(),
+            workspace_ids: vec!["w1".into()],
+        }),
+    };
+    let json = serde_json::to_value(&assign).unwrap();
+    assert_eq!(json["method"], "group.assign");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), assign);
+}
+
+#[test]
 fn agent_start_and_prompt_requests_round_trip() {
     let start = Request {
         id: "start".into(),
@@ -740,6 +762,7 @@ fn worktree_request_and_response_round_trip() {
                 active_tab_id: "w_1:1".into(),
                 agent_status: AgentStatus::Unknown,
                 tokens: HashMap::new(),
+                group_id: None,
                 worktree: Some(WorkspaceWorktreeInfo {
                     repo_key: "/repo/herdr/.git".into(),
                     repo_name: "herdr".into(),
@@ -826,6 +849,7 @@ fn worktree_lifecycle_events_round_trip() {
         active_tab_id: "w_2:1".into(),
         agent_status: AgentStatus::Unknown,
         tokens: HashMap::new(),
+        group_id: None,
         worktree: Some(WorkspaceWorktreeInfo {
             repo_key: "/repo/herdr/.git".into(),
             repo_name: "herdr".into(),

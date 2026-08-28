@@ -524,6 +524,12 @@
           "description": "Close the selected workspace."
         },
         {
+          "key": "keys.move_to_group",
+          "type": "keybinding",
+          "default": "\"\"",
+          "description": "Open the move-to-group picker for the selected workspace. Unbound by default."
+        },
+        {
           "key": "keys.workspace_picker",
           "type": "keybinding",
           "default": "\"prefix+w\"",

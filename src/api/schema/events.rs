@@ -32,6 +32,12 @@ pub enum Subscription {
     WorkspaceClosed {},
     #[serde(rename = "workspace.focused")]
     WorkspaceFocused {},
+    #[serde(rename = "group.created")]
+    GroupCreated {},
+    #[serde(rename = "group.updated")]
+    GroupUpdated {},
+    #[serde(rename = "group.removed")]
+    GroupRemoved {},
     #[serde(rename = "worktree.created")]
     WorktreeCreated {},
     #[serde(rename = "worktree.opened")]
@@ -200,6 +206,9 @@ pub enum EventKind {
     WorkspaceMoved,
     WorkspaceReordered,
     WorkspaceFocused,
+    GroupCreated,
+    GroupUpdated,
+    GroupRemoved,
     WorktreeCreated,
     WorktreeOpened,
     WorktreeRemoved,
@@ -231,6 +240,9 @@ impl EventKind {
             EventKind::WorkspaceMoved => "workspace.moved",
             EventKind::WorkspaceReordered => "workspace.reordered",
             EventKind::WorkspaceFocused => "workspace.focused",
+            EventKind::GroupCreated => "group.created",
+            EventKind::GroupUpdated => "group.updated",
+            EventKind::GroupRemoved => "group.removed",
             EventKind::WorktreeCreated => "worktree.created",
             EventKind::WorktreeOpened => "worktree.opened",
             EventKind::WorktreeRemoved => "worktree.removed",
@@ -263,6 +275,9 @@ pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
     EventKind::WorkspaceMoved,
     EventKind::WorkspaceReordered,
     EventKind::WorkspaceFocused,
+    EventKind::GroupCreated,
+    EventKind::GroupUpdated,
+    EventKind::GroupRemoved,
     EventKind::WorktreeCreated,
     EventKind::WorktreeOpened,
     EventKind::WorktreeRemoved,
@@ -291,6 +306,9 @@ pub const PLUGIN_HOOK_EVENT_KINDS: &[EventKind] = &[
     EventKind::WorkspaceMoved,
     EventKind::WorkspaceReordered,
     EventKind::WorkspaceFocused,
+    EventKind::GroupCreated,
+    EventKind::GroupUpdated,
+    EventKind::GroupRemoved,
     EventKind::WorktreeCreated,
     EventKind::WorktreeOpened,
     EventKind::WorktreeRemoved,
@@ -451,6 +469,15 @@ pub enum EventData {
     },
     WorkspaceFocused {
         workspace_id: String,
+    },
+    GroupCreated {
+        group: super::groups::GroupInfo,
+    },
+    GroupUpdated {
+        group: super::groups::GroupInfo,
+    },
+    GroupRemoved {
+        group_id: String,
     },
     WorktreeCreated {
         workspace: WorkspaceInfo,

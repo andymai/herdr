@@ -1,7 +1,8 @@
 use crate::api::schema::{
-    EmptyParams, LayoutSetSplitRatioParams, Method, PaneFocusDirectionParams, PaneInputSetParams,
-    PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneZoomParams, TabCreateParams, TabMoveParams, TabRenameParams, TabTarget,
+    EmptyParams, GroupAssignParams, GroupCreateParams, GroupRenameParams, GroupTarget,
+    GroupUnassignParams, LayoutSetSplitRatioParams, Method, PaneFocusDirectionParams,
+    PaneInputSetParams, PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams,
+    PaneTarget, PaneZoomParams, TabCreateParams, TabMoveParams, TabRenameParams, TabTarget,
     WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceMoveBlockParams, WorkspaceMoveParams,
     WorkspaceRenameParams, WorkspaceTarget, WorktreeCreateParams, WorktreeOpenParams,
     WorktreeRemoveParams,
@@ -52,6 +53,46 @@ impl App {
         params: WorkspaceMoveParams,
     ) -> String {
         self.dispatch_runtime_mutation(id, Method::WorkspaceMove(params))
+    }
+
+    pub(crate) fn runtime_group_create(
+        &mut self,
+        id: &'static str,
+        params: GroupCreateParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::GroupCreate(params))
+    }
+
+    pub(crate) fn runtime_group_rename(
+        &mut self,
+        id: &'static str,
+        params: GroupRenameParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::GroupRename(params))
+    }
+
+    pub(crate) fn runtime_group_assign(
+        &mut self,
+        id: &'static str,
+        params: GroupAssignParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::GroupAssign(params))
+    }
+
+    pub(crate) fn runtime_group_unassign(
+        &mut self,
+        id: &'static str,
+        params: GroupUnassignParams,
+    ) -> String {
+        self.dispatch_runtime_mutation(id, Method::GroupUnassign(params))
+    }
+
+    pub(crate) fn runtime_group_remove(&mut self, id: &'static str, group_id: String) -> String {
+        self.dispatch_runtime_mutation(id, Method::GroupRemove(GroupTarget { group_id }))
+    }
+
+    pub(crate) fn runtime_group_close(&mut self, id: &'static str, group_id: String) -> String {
+        self.dispatch_runtime_mutation(id, Method::GroupClose(GroupTarget { group_id }))
     }
 
     pub(crate) fn runtime_workspace_move_block(

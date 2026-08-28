@@ -513,6 +513,7 @@ impl App {
                     checkout_path: space.checkout_path.display().to_string(),
                     is_linked_worktree: space.is_linked_worktree,
                 }),
+            group_id: ws.group_id.clone(),
         }
     }
 }

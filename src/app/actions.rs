@@ -1306,8 +1306,9 @@ impl AppState {
         };
         let order = entries
             .into_iter()
-            .map(|entry| match entry {
-                crate::ui::WorkspaceListEntry::Workspace { ws_idx, .. } => ws_idx,
+            .filter_map(|entry| match entry {
+                crate::ui::WorkspaceListEntry::Workspace { ws_idx, .. } => Some(ws_idx),
+                crate::ui::WorkspaceListEntry::GroupHeader { .. } => None,
             })
             .collect::<Vec<_>>();
         if order.is_empty() {
@@ -1696,6 +1697,7 @@ impl AppState {
         for idx in close_indices.iter().rev() {
             self.workspaces.remove(*idx);
         }
+        self.dissolve_empty_groups();
         self.remove_unattached_terminal_ids(terminal_ids);
         if self.workspaces.is_empty() {
             self.active = None;
@@ -2010,6 +2012,15 @@ impl AppState {
         self.workspaces
             .iter()
             .position(|workspace| workspace.id == workspace_id)
+    }
+
+    pub(crate) fn begin_group_close_confirmation(&mut self, group_id: &str) -> bool {
+        if self.group_index_by_id(group_id).is_none() {
+            return false;
+        }
+        self.confirm_close_group_id = Some(group_id.to_string());
+        self.mode = Mode::ConfirmClose;
+        true
     }
 
     pub(crate) fn confirm_implicit_worktree_group_close(&mut self, ws_idx: usize) -> bool {

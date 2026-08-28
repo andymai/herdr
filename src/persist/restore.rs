@@ -418,6 +418,7 @@ fn restore_workspace(
             cached_git_ahead_behind: None,
             cached_git_space,
             worktree_space,
+            group_id: snap.group_id.clone(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,
@@ -441,6 +442,69 @@ fn restored_worktree_space_membership(
             && crate::workspace::git_space_metadata(&space.checkout_path)
                 .is_some_and(|current| current.key == space.key)
     })
+}
+
+/// Repair persisted group state against the restored workspaces: drop
+/// memberships that reference unknown groups, make space-mates agree on one
+/// group (the non-linked parent wins), dissolve groups with no remaining
+/// members, and prune collapse state to live groups.
+pub fn normalize_restored_groups(
+    workspaces: &mut [Workspace],
+    groups: Vec<crate::workspace::WorkspaceGroup>,
+    collapsed_group_ids: std::collections::HashSet<String>,
+) -> (
+    Vec<crate::workspace::WorkspaceGroup>,
+    std::collections::HashSet<String>,
+) {
+    let known_ids: std::collections::HashSet<&str> =
+        groups.iter().map(|group| group.id.as_str()).collect();
+    for workspace in workspaces.iter_mut() {
+        if workspace
+            .group_id
+            .as_deref()
+            .is_some_and(|id| !known_ids.contains(id))
+        {
+            workspace.group_id = None;
+        }
+    }
+
+    let mut space_groups: HashMap<String, Option<String>> = HashMap::new();
+    for workspace in workspaces.iter() {
+        let Some(space) = workspace.worktree_space() else {
+            continue;
+        };
+        let entry = space_groups.entry(space.key.clone());
+        if space.is_linked_worktree {
+            entry.or_insert_with(|| workspace.group_id.clone());
+        } else {
+            *entry.or_default() = workspace.group_id.clone();
+        }
+    }
+    for workspace in workspaces.iter_mut() {
+        let Some(key) = workspace.worktree_space().map(|space| space.key.clone()) else {
+            continue;
+        };
+        if let Some(group_id) = space_groups.get(&key) {
+            workspace.group_id = group_id.clone();
+        }
+    }
+
+    let groups: Vec<crate::workspace::WorkspaceGroup> = groups
+        .into_iter()
+        .filter(|group| {
+            workspaces
+                .iter()
+                .any(|workspace| workspace.group_id.as_deref() == Some(group.id.as_str()))
+        })
+        .collect();
+    let live_ids: std::collections::HashSet<&str> =
+        groups.iter().map(|group| group.id.as_str()).collect();
+    let collapsed_group_ids = collapsed_group_ids
+        .into_iter()
+        .filter(|id| live_ids.contains(id.as_str()))
+        .collect();
+    crate::workspace::reserve_group_ids(&groups);
+    (groups, collapsed_group_ids)
 }
 
 fn restore_tab(
@@ -917,6 +981,71 @@ fn collect_ids_inner(node: &Node, ids: &mut Vec<PaneId>) {
 mod tests {
     use super::*;
 
+    fn test_space_membership(key: &str, linked: bool) -> crate::workspace::WorktreeSpaceMembership {
+        crate::workspace::WorktreeSpaceMembership {
+            key: key.to_string(),
+            label: key.to_string(),
+            repo_root: PathBuf::from("/tmp/repo"),
+            checkout_path: PathBuf::from("/tmp/repo"),
+            is_linked_worktree: linked,
+        }
+    }
+
+    #[test]
+    fn normalize_restored_groups_drops_unknown_and_dissolves_empty() {
+        let mut workspaces = vec![Workspace::test_new("a"), Workspace::test_new("b")];
+        workspaces[0].group_id = Some("gmissing".to_string());
+        let groups = vec![crate::workspace::WorkspaceGroup {
+            id: "gempty".to_string(),
+            name: "Empty".to_string(),
+        }];
+        let collapsed = std::collections::HashSet::from(["gempty".to_string()]);
+
+        let (groups, collapsed) = normalize_restored_groups(&mut workspaces, groups, collapsed);
+
+        assert!(groups.is_empty());
+        assert!(collapsed.is_empty());
+        assert_eq!(workspaces[0].group_id, None);
+        assert_eq!(workspaces[1].group_id, None);
+    }
+
+    #[test]
+    fn normalize_restored_groups_keeps_valid_membership() {
+        let mut workspaces = vec![Workspace::test_new("a"), Workspace::test_new("b")];
+        workspaces[0].group_id = Some("g1".to_string());
+        let groups = vec![crate::workspace::WorkspaceGroup {
+            id: "g1".to_string(),
+            name: "Client".to_string(),
+        }];
+        let collapsed = std::collections::HashSet::from(["g1".to_string()]);
+
+        let (groups, collapsed) = normalize_restored_groups(&mut workspaces, groups, collapsed);
+
+        assert_eq!(groups.len(), 1);
+        assert!(collapsed.contains("g1"));
+        assert_eq!(workspaces[0].group_id.as_deref(), Some("g1"));
+    }
+
+    #[test]
+    fn normalize_restored_groups_repairs_space_divergence_toward_parent() {
+        let mut workspaces = vec![Workspace::test_new("parent"), Workspace::test_new("linked")];
+        workspaces[0].worktree_space = Some(test_space_membership("repo", false));
+        workspaces[0].group_id = Some("g1".to_string());
+        workspaces[1].worktree_space = Some(test_space_membership("repo", true));
+        workspaces[1].group_id = None;
+        let groups = vec![crate::workspace::WorkspaceGroup {
+            id: "g1".to_string(),
+            name: "Client".to_string(),
+        }];
+
+        let (groups, _) =
+            normalize_restored_groups(&mut workspaces, groups, std::collections::HashSet::new());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(workspaces[0].group_id.as_deref(), Some("g1"));
+        assert_eq!(workspaces[1].group_id.as_deref(), Some("g1"));
+    }
+
     fn test_session_path(name: &str) -> String {
         std::env::current_dir()
             .unwrap()
@@ -1177,6 +1306,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_id: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1211,6 +1341,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            groups: Default::default(),
+            collapsed_group_ids: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1257,6 +1389,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_id: None,
                 public_pane_numbers: HashMap::from([(10, 1), (20, 3)]),
                 next_public_pane_number: 4,
                 public_tab_numbers: vec![5],
@@ -1304,6 +1437,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            groups: Default::default(),
+            collapsed_group_ids: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1366,6 +1501,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_id: None,
                 public_pane_numbers: HashMap::from([(10, 1), (11, 2), (12, 3), (13, 4)]),
                 next_public_pane_number: 5,
                 public_tab_numbers: vec![1, 3, 4, 5],
@@ -1411,6 +1547,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            groups: Default::default(),
+            collapsed_group_ids: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1449,6 +1587,7 @@ mod tests {
             custom_name: None,
             identity_cwd: cwd,
             worktree_space: None,
+            group_id: None,
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -1488,6 +1627,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd.clone(),
                 worktree_space: None,
+                group_id: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1522,6 +1662,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            groups: Default::default(),
+            collapsed_group_ids: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1697,6 +1839,7 @@ mod tests {
                 custom_name: None,
                 identity_cwd: cwd,
                 worktree_space: None,
+                group_id: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1716,6 +1859,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: Default::default(),
+            groups: Default::default(),
+            collapsed_group_ids: Default::default(),
         };
         (snapshot, history)
     }

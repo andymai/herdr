@@ -1,8 +1,9 @@
 use crate::api::schema::{
-    EmptyParams, Method, PaneFocusDirectionParams, PaneInputSetParams, PaneMoveParams,
-    PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams, TabTarget,
-    WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
+    EmptyParams, GroupAssignParams, GroupCreateParams, GroupRenameParams, GroupSetCollapsedParams,
+    GroupTarget, GroupUnassignParams, Method, PaneFocusDirectionParams, PaneInputSetParams,
+    PaneMoveParams, PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams,
+    PaneTarget, PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams,
+    TabTarget, WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
     WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams, WorktreeRemoveParams,
 };
 
@@ -44,6 +45,48 @@ pub(super) fn workspace_rename(params: WorkspaceRenameParams) -> std::io::Result
 
 pub(super) fn workspace_close(params: WorkspaceCloseParams) -> std::io::Result<i32> {
     print_method_response("cli:workspace:close", Method::WorkspaceClose(params))
+}
+
+pub(super) fn group_list() -> std::io::Result<i32> {
+    print_method_response("cli:group:list", Method::GroupList(EmptyParams::default()))
+}
+
+pub(super) fn group_get(group_id: String) -> std::io::Result<i32> {
+    print_method_response("cli:group:get", Method::GroupGet(GroupTarget { group_id }))
+}
+
+pub(super) fn group_create(params: GroupCreateParams) -> std::io::Result<i32> {
+    print_method_response("cli:group:create", Method::GroupCreate(params))
+}
+
+pub(super) fn group_rename(params: GroupRenameParams) -> std::io::Result<i32> {
+    print_method_response("cli:group:rename", Method::GroupRename(params))
+}
+
+pub(super) fn group_assign(params: GroupAssignParams) -> std::io::Result<i32> {
+    print_method_response("cli:group:assign", Method::GroupAssign(params))
+}
+
+pub(super) fn group_unassign(params: GroupUnassignParams) -> std::io::Result<i32> {
+    print_method_response("cli:group:unassign", Method::GroupUnassign(params))
+}
+
+pub(super) fn group_remove(group_id: String) -> std::io::Result<i32> {
+    print_method_response(
+        "cli:group:remove",
+        Method::GroupRemove(GroupTarget { group_id }),
+    )
+}
+
+pub(super) fn group_close(group_id: String) -> std::io::Result<i32> {
+    print_method_response(
+        "cli:group:close",
+        Method::GroupClose(GroupTarget { group_id }),
+    )
+}
+
+pub(super) fn group_set_collapsed(params: GroupSetCollapsedParams) -> std::io::Result<i32> {
+    print_method_response("cli:group:set_collapsed", Method::GroupSetCollapsed(params))
 }
 
 pub(super) fn tab_list(params: TabListParams) -> std::io::Result<i32> {

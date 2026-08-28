@@ -15,6 +15,7 @@ pub(crate) use api_helpers::limit_snapshot_lines;
 mod config_io;
 mod creation;
 mod git_refresh;
+mod groups;
 mod ids;
 mod input;
 pub(crate) mod pane_graphics;
@@ -418,6 +419,8 @@ impl App {
             sidebar_width_source,
             sidebar_section_split,
             collapsed_space_keys,
+            groups,
+            collapsed_group_ids,
         ) = if no_session {
             (
                 Vec::new(),
@@ -427,6 +430,8 @@ impl App {
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
                 std::collections::HashSet::new(),
+                Vec::new(),
+                std::collections::HashSet::new(),
             )
         } else if let Some(snap) = crate::persist::load() {
             let history = config
@@ -434,7 +439,7 @@ impl App {
                 .pane_history
                 .then(crate::persist::load_history)
                 .flatten();
-            let (ws, terminals, terminal_runtimes) = crate::persist::restore(
+            let (mut ws, terminals, terminal_runtimes) = crate::persist::restore(
                 &snap,
                 history.as_ref(),
                 24,
@@ -463,11 +468,18 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    Vec::new(),
+                    std::collections::HashSet::new(),
                 )
             } else {
                 crate::logging::session_restored(ws.len(), "ok");
                 let active = snap.active.filter(|&i| i < ws.len());
                 let selected = snap.selected.min(ws.len().saturating_sub(1));
+                let (groups, collapsed_group_ids) = crate::persist::normalize_restored_groups(
+                    &mut ws,
+                    snap.groups.clone(),
+                    snap.collapsed_group_ids.clone(),
+                );
                 (
                     ws,
                     active,
@@ -480,6 +492,8 @@ impl App {
                     },
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
+                    groups,
+                    collapsed_group_ids,
                 )
             }
         } else {
@@ -490,6 +504,8 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                std::collections::HashSet::new(),
+                Vec::new(),
                 std::collections::HashSet::new(),
             )
         };
@@ -583,6 +599,11 @@ impl App {
             worktree_remove: None,
             worktree_directory,
             collapsed_space_keys,
+            groups,
+            collapsed_group_ids,
+            group_name_target: None,
+            group_picker: None,
+            confirm_close_group_id: None,
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -609,6 +630,7 @@ impl App {
                 layout: state::ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
+                group_header_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
                 tab_scroll_left_hit_area: Rect::default(),
@@ -623,6 +645,7 @@ impl App {
             },
             drag: None,
             workspace_presses: HashMap::new(),
+            group_header_presses: HashMap::new(),
             tab_presses: HashMap::new(),
             selection: None,
             selection_autoscroll: None,
@@ -882,6 +905,13 @@ impl App {
             app.state.sidebar_section_split = split;
         }
         app.state.collapsed_space_keys = snapshot.collapsed_space_keys.clone();
+        let (groups, collapsed_group_ids) = crate::persist::normalize_restored_groups(
+            &mut app.state.workspaces,
+            snapshot.groups.clone(),
+            snapshot.collapsed_group_ids.clone(),
+        );
+        app.state.groups = groups;
+        app.state.collapsed_group_ids = collapsed_group_ids;
         app.state.mode = if app.state.active.is_some() {
             state::Mode::Terminal
         } else {
@@ -1923,6 +1953,12 @@ impl App {
             }
             Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
                 self.handle_rename_key_via_api(key_event);
+            }
+            Mode::GroupName => {
+                self.handle_group_name_key_via_api(key_event);
+            }
+            Mode::GroupPicker => {
+                self.handle_group_picker_key_via_api(key_event);
             }
             Mode::NewLinkedWorktree => {
                 self.handle_worktree_create_key(key_event);
@@ -6224,7 +6260,10 @@ last_pane = "prefix+tab"
         app.state.selected = 0;
         app.state.confirm_close = false;
         app.state.context_menu = Some(state::ContextMenuState {
-            kind: state::ContextMenuKind::Workspace { ws_idx: 1 },
+            kind: state::ContextMenuKind::Workspace {
+                ws_idx: 1,
+                in_group: false,
+            },
             x: 2,
             y: 2,
             list: state::MenuListState::new(1),

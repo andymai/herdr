@@ -8,8 +8,7 @@ use ratatui::{
 
 use super::sidebar::{
     agent_panel_entries, agent_panel_entries_from, grouped_child_display_label,
-    next_entry_is_indented_workspace, workspace_list_entries_expanded, AgentPanelEntry,
-    WorkspaceListEntry,
+    next_entry_is_child_row, workspace_list_entries_expanded, AgentPanelEntry, WorkspaceListEntry,
 };
 use super::status::{state_icon, state_icon_symbol};
 use super::text::{display_width_u16, truncate_end};
@@ -114,7 +113,12 @@ pub(crate) fn mobile_switcher_workspace_doc_range(
     // in the entry list, not its raw array index.
     let pos = workspace_list_entries_expanded(app)
         .iter()
-        .position(|WorkspaceListEntry::Workspace { ws_idx, .. }| *ws_idx == idx)
+        .position(|entry| {
+            matches!(
+                entry,
+                WorkspaceListEntry::Workspace { ws_idx, .. } if *ws_idx == idx
+            )
+        })
         .unwrap_or(idx);
     // spaces sit after the agents block, then a title + "new workspace" row.
     let start = mobile_agents_block_height(app) + 2 + pos * 2;
@@ -177,9 +181,12 @@ pub(crate) fn mobile_switcher_target_at(
     let spaces_end = cursor + space_entries.len() * 2;
     if doc_row >= cursor && doc_row < spaces_end {
         let entry_idx = (doc_row - cursor) / 2;
-        return space_entries.get(entry_idx).map(
-            |WorkspaceListEntry::Workspace { ws_idx, .. }| MobileSwitcherTarget::Workspace(*ws_idx),
-        );
+        return space_entries.get(entry_idx).and_then(|entry| match entry {
+            WorkspaceListEntry::Workspace { ws_idx, .. } => {
+                Some(MobileSwitcherTarget::Workspace(*ws_idx))
+            }
+            WorkspaceListEntry::GroupHeader { .. } => None,
+        });
     }
     cursor = spaces_end;
 
@@ -587,24 +594,65 @@ fn render_mobile_switcher_content(
     );
     doc_y += 1;
     let space_entries = workspace_list_entries_expanded(app);
-    for (entry_idx, WorkspaceListEntry::Workspace { ws_idx, indented }) in
-        space_entries.iter().enumerate()
-    {
-        let Some(ws) = app.workspaces.get(*ws_idx) else {
+    for (entry_idx, entry) in space_entries.iter().enumerate() {
+        let (ws_idx, depth, space_child) = match entry {
+            WorkspaceListEntry::Workspace {
+                ws_idx,
+                depth,
+                space_child,
+            } => (*ws_idx, *depth, *space_child),
+            WorkspaceListEntry::GroupHeader { group_idx, .. } => {
+                let Some(group) = app.groups.get(*group_idx) else {
+                    doc_y += 2;
+                    continue;
+                };
+                let member_count = app.group_member_indices(&group.id).len();
+                let bg = p.panel_bg;
+                let title_spans = vec![
+                    Span::styled("  ", Style::default().bg(bg)),
+                    Span::styled(
+                        truncate_end(&group.name, content.width.saturating_sub(4) as usize),
+                        Style::default()
+                            .fg(p.subtext0)
+                            .bg(bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ];
+                let detail = format!("  group · {member_count}");
+                render_two_line_item(
+                    frame,
+                    viewport,
+                    content,
+                    doc_y,
+                    app.mobile_switcher_scroll,
+                    bg,
+                    Line::from(title_spans),
+                    truncate_end(&detail, content.width as usize),
+                    p.overlay0,
+                );
+                doc_y += 2;
+                continue;
+            }
+        };
+        let Some(ws) = app.workspaces.get(ws_idx) else {
             continue;
         };
-        let active = Some(*ws_idx) == app.active;
-        let selected = *ws_idx == app.selected;
+        let active = Some(ws_idx) == app.active;
+        let selected = ws_idx == app.selected;
         let bg = mobile_item_bg(selected, active, p);
         let (state, seen) = ws.aggregate_state(&app.terminals);
         let (dot, dot_style) = state_icon(state, seen, app.status_indicators, p);
 
         let mut title_spans = vec![Span::styled("  ", Style::default().bg(bg))];
+        let extra_indent = "   ".repeat(usize::from(depth.saturating_sub(1)));
+        if !extra_indent.is_empty() {
+            title_spans.push(Span::styled(extra_indent.clone(), Style::default().bg(bg)));
+        }
         // Worktrees of the same space render as branches off their parent, so a
         // child gets an L/T connector on its name row and a matching vertical
-        // continuation on its detail row.
-        let detail_prefix = if *indented {
-            let last_child = !next_entry_is_indented_workspace(&space_entries, entry_idx);
+        // continuation on its detail row. Group members indent the same way.
+        let base_detail_prefix = if depth > 0 {
+            let last_child = !next_entry_is_child_row(&space_entries, entry_idx);
             title_spans.push(Span::styled(
                 if last_child { "└─ " } else { "├─ " },
                 Style::default().fg(p.overlay0).bg(bg),
@@ -617,11 +665,12 @@ fn render_mobile_switcher_content(
         } else {
             "  "
         };
+        let detail_prefix = format!("{extra_indent}{base_detail_prefix}");
 
         title_spans.push(Span::styled(dot, dot_style.bg(bg)));
         title_spans.push(Span::styled(" ", Style::default().bg(bg)));
         let raw_label = ws.display_name_from(&app.terminals, terminal_runtimes);
-        let name = if *indented {
+        let name = if space_child {
             grouped_child_display_label(
                 &raw_label,
                 ws.branch().as_deref(),
@@ -630,7 +679,11 @@ fn render_mobile_switcher_content(
         } else {
             raw_label
         };
-        let name_budget = content.width.saturating_sub(if *indented { 8 } else { 5 }) as usize;
+        let name_budget = content
+            .width
+            .saturating_sub(if depth > 0 { 8 } else { 5 })
+            .saturating_sub(3 * u16::from(depth.saturating_sub(1)))
+            as usize;
         title_spans.push(Span::styled(
             truncate_end(&name, name_budget),
             Style::default()

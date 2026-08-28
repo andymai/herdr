@@ -34,6 +34,7 @@ pub(super) fn command() -> Command {
         .subcommand(server_command())
         .subcommand(api_command())
         .subcommand(workspace_command())
+        .subcommand(group_command())
         .subcommand(worktree_command())
         .subcommand(tab_command())
         .subcommand(notification_command())
@@ -230,6 +231,56 @@ fn workspace_command() -> Command {
                 .arg(option("ttl-ms", "N")),
         )
         .subcommand(id_command("close", "workspace_id", "Close a workspace"))
+}
+
+fn group_command() -> Command {
+    Command::new("group")
+        .about("Organize workspaces into groups over the socket API")
+        .subcommand(Command::new("list").about("List workspace groups"))
+        .subcommand(id_command("get", "group", "Show a group"))
+        .subcommand(
+            Command::new("create")
+                .about("Create a group containing workspaces")
+                .arg(option("name", "NAME").required(true))
+                .arg(required("workspace", "WORKSPACE").num_args(1..)),
+        )
+        .subcommand(
+            Command::new("rename")
+                .about("Rename a group")
+                .arg(required("group", "GROUP"))
+                .arg(required("name", "NAME").num_args(1..)),
+        )
+        .subcommand(
+            Command::new("assign")
+                .about("Move workspaces into a group")
+                .arg(required("group", "GROUP"))
+                .arg(required("workspace", "WORKSPACE").num_args(1..)),
+        )
+        .subcommand(
+            Command::new("unassign")
+                .about("Return workspaces to the top level")
+                .arg(required("workspace", "WORKSPACE").num_args(1..)),
+        )
+        .subcommand(id_command(
+            "remove",
+            "group",
+            "Remove a group without closing its workspaces",
+        ))
+        .subcommand(id_command(
+            "close",
+            "group",
+            "Close all workspaces in a group",
+        ))
+        .subcommand(id_command(
+            "collapse",
+            "group",
+            "Collapse a group in the sidebar",
+        ))
+        .subcommand(id_command(
+            "expand",
+            "group",
+            "Expand a group in the sidebar",
+        ))
 }
 
 fn worktree_command() -> Command {

@@ -41,6 +41,7 @@
       "id": "wdev2",
       "custom_name": null,
       "identity_cwd": "/home/test/projects/project-c",
+      "group_id": "g1",
       "tabs": [
         {
           "custom_name": null,
@@ -75,5 +76,12 @@
   "active": 0,
   "selected": 0,
   "agent_panel_scope": "CurrentWorkspace",
-  "sidebar_section_split": 0.4
+  "sidebar_section_split": 0.4,
+  "groups": [
+    {
+      "id": "g1",
+      "name": "Client"
+    }
+  ],
+  "collapsed_group_ids": ["g1"]
 }

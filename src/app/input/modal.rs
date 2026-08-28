@@ -406,6 +406,62 @@ pub(super) fn open_rename_active_tab(state: &mut AppState, replace_on_type: bool
     }
 }
 
+pub(super) fn open_group_picker(state: &mut AppState, ws_idx: usize) {
+    let Some(ws) = state.workspaces.get(ws_idx) else {
+        return;
+    };
+    let member_workspace_ids = vec![ws.id.clone()];
+    let current_group_id = ws.group_id.clone();
+    let entries = state
+        .groups
+        .iter()
+        .map(|group| crate::app::state::GroupPickerEntry {
+            group_id: group.id.clone(),
+            name: group.name.clone(),
+            member_count: state.group_member_indices(&group.id).len(),
+        })
+        .collect::<Vec<_>>();
+    let selected = current_group_id
+        .as_deref()
+        .and_then(|group_id| entries.iter().position(|entry| entry.group_id == group_id))
+        .unwrap_or(0);
+    state.group_picker = Some(crate::app::state::GroupPickerState {
+        member_workspace_ids,
+        current_group_id,
+        entries,
+        selected,
+    });
+    state.mode = Mode::GroupPicker;
+}
+
+pub(super) fn open_group_name_create(state: &mut AppState, member_workspace_ids: Vec<String>) {
+    state.group_picker = None;
+    state.group_name_target = Some(crate::app::state::GroupNameTarget::Create {
+        member_workspace_ids,
+    });
+    state.name_input = "Group".to_string();
+    state.name_input_replace_on_type = true;
+    state.mode = Mode::GroupName;
+}
+
+pub(super) fn open_group_name_rename(state: &mut AppState, group_id: String) {
+    let Some(group) = state.groups.iter().find(|group| group.id == group_id) else {
+        return;
+    };
+    state.name_input = group.name.clone();
+    state.name_input_replace_on_type = false;
+    state.group_name_target = Some(crate::app::state::GroupNameTarget::Rename { group_id });
+    state.mode = Mode::GroupName;
+}
+
+pub(super) fn cancel_group_modal(state: &mut AppState) {
+    state.group_name_target = None;
+    state.group_picker = None;
+    state.name_input.clear();
+    state.name_input_replace_on_type = false;
+    leave_modal(state);
+}
+
 pub(super) fn open_rename_pane(state: &mut AppState, pane_id: crate::layout::PaneId) {
     let Some(ws) = state.active.and_then(|i| state.workspaces.get(i)) else {
         return;
@@ -738,7 +794,12 @@ pub(super) fn open_confirm_close(state: &mut AppState) {
 
 #[cfg(test)]
 pub(super) fn confirm_close_accept(state: &mut AppState) {
-    if let Some(ws_idx) = state.take_confirmed_workspace_close_index() {
+    if let Some(group_id) = state.confirm_close_group_id.take() {
+        while let Some(idx) = state.group_member_indices(&group_id).first().copied() {
+            state.selected = idx;
+            state.close_selected_workspace();
+        }
+    } else if let Some(ws_idx) = state.take_confirmed_workspace_close_index() {
         state.selected = ws_idx;
         state.close_selected_workspace();
     }
@@ -751,6 +812,7 @@ pub(super) fn confirm_close_accept(state: &mut AppState) {
 
 pub(super) fn confirm_close_cancel(state: &mut AppState) {
     state.confirm_close_workspace_id = None;
+    state.confirm_close_group_id = None;
     state.mode = Mode::Navigate;
 }
 
@@ -806,13 +868,15 @@ pub(super) fn apply_context_menu_action(
             leave_modal(state);
         }
         (
-            ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            ContextMenuKind::Workspace { ws_idx, .. }
+            | ContextMenuKind::GitWorkspace { ws_idx, .. },
             Some("Rename"),
         ) => {
             open_rename_workspace(state, terminal_runtimes, ws_idx);
         }
         (
-            ContextMenuKind::Workspace { ws_idx } | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            ContextMenuKind::Workspace { ws_idx, .. }
+            | ContextMenuKind::GitWorkspace { ws_idx, .. },
             Some("Close" | "Close group"),
         ) => {
             state.selected = ws_idx;
@@ -822,6 +886,62 @@ pub(super) fn apply_context_menu_action(
                 state.close_selected_workspace();
                 state.mode = Mode::Navigate;
             }
+        }
+        (
+            ContextMenuKind::Workspace { ws_idx, .. }
+            | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            Some("Move to group..."),
+        ) => {
+            open_group_picker(state, ws_idx);
+        }
+        (
+            ContextMenuKind::Workspace { ws_idx, .. }
+            | ContextMenuKind::GitWorkspace { ws_idx, .. },
+            Some("Remove from group"),
+        ) => {
+            state.unassign_workspaces(&[ws_idx]);
+            leave_modal(state);
+        }
+        (ContextMenuKind::Group { group_idx, .. }, Some("Rename")) => {
+            if let Some(group_id) = state.groups.get(group_idx).map(|group| group.id.clone()) {
+                open_group_name_rename(state, group_id);
+            }
+        }
+        (ContextMenuKind::Group { group_idx, .. }, Some("Ungroup")) => {
+            if let Some(group_id) = state.groups.get(group_idx).map(|group| group.id.clone()) {
+                state.remove_group(&group_id);
+            }
+            leave_modal(state);
+        }
+        (ContextMenuKind::Group { group_idx, .. }, Some("Close all in group")) => {
+            if let Some(group_id) = state.groups.get(group_idx).map(|group| group.id.clone()) {
+                if state.confirm_close {
+                    state.begin_group_close_confirmation(&group_id);
+                } else {
+                    while let Some(idx) = state.group_member_indices(&group_id).first().copied() {
+                        state.selected = idx;
+                        state.close_selected_workspace();
+                    }
+                    leave_modal(state);
+                }
+            }
+        }
+        (
+            ContextMenuKind::Group {
+                group_idx,
+                collapsed,
+            },
+            Some("Collapse" | "Expand"),
+        ) => {
+            if let Some(group_id) = state.groups.get(group_idx).map(|group| group.id.clone()) {
+                if collapsed {
+                    state.collapsed_group_ids.remove(&group_id);
+                } else {
+                    state.collapsed_group_ids.insert(group_id);
+                }
+                state.mark_session_dirty();
+            }
+            leave_modal(state);
         }
         (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("New tab")) => {
             state.selected = ws_idx;
@@ -1008,6 +1128,86 @@ impl App {
         handle_rename_edit_key(&mut self.state, key);
     }
 
+    pub(crate) fn handle_group_name_key_via_api(&mut self, key: KeyEvent) {
+        match modal_action_from_key(&key, RENAME_ACTIONS) {
+            Some(ModalAction::Save) => {
+                let name = self.state.name_input.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                match self.state.group_name_target.take() {
+                    Some(crate::app::state::GroupNameTarget::Create {
+                        member_workspace_ids,
+                    }) => {
+                        self.runtime_group_create(
+                            "tui.group.create",
+                            crate::api::schema::GroupCreateParams {
+                                name,
+                                workspace_ids: member_workspace_ids,
+                            },
+                        );
+                    }
+                    Some(crate::app::state::GroupNameTarget::Rename { group_id }) => {
+                        self.runtime_group_rename(
+                            "tui.group.rename",
+                            crate::api::schema::GroupRenameParams { group_id, name },
+                        );
+                    }
+                    None => {}
+                }
+                cancel_group_modal(&mut self.state);
+            }
+            Some(ModalAction::Clear) => {
+                self.state.name_input.clear();
+                self.state.name_input_replace_on_type = false;
+            }
+            Some(ModalAction::Cancel) => cancel_group_modal(&mut self.state),
+            _ => handle_rename_edit_key(&mut self.state, key),
+        }
+    }
+
+    pub(crate) fn handle_group_picker_key_via_api(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => cancel_group_modal(&mut self.state),
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(picker) = self.state.group_picker.as_mut() {
+                    picker.select_previous();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(picker) = self.state.group_picker.as_mut() {
+                    picker.select_next();
+                }
+            }
+            KeyCode::Enter => self.confirm_group_picker_selection_via_api(),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn confirm_group_picker_selection_via_api(&mut self) {
+        let Some(picker) = self.state.group_picker.take() else {
+            return;
+        };
+        if picker.selected >= picker.new_group_row() {
+            open_group_name_create(&mut self.state, picker.member_workspace_ids);
+            return;
+        }
+        let Some(entry) = picker.entries.get(picker.selected) else {
+            cancel_group_modal(&mut self.state);
+            return;
+        };
+        if picker.current_group_id.as_deref() != Some(entry.group_id.as_str()) {
+            self.runtime_group_assign(
+                "tui.group.assign",
+                crate::api::schema::GroupAssignParams {
+                    group_id: entry.group_id.clone(),
+                    workspace_ids: picker.member_workspace_ids,
+                },
+            );
+        }
+        cancel_group_modal(&mut self.state);
+    }
+
     fn save_rename_modal_via_api(&mut self) {
         let new_name = if self.state.name_input.trim().is_empty() {
             self.state.name_input.clone()
@@ -1117,7 +1317,9 @@ impl App {
     }
 
     pub(super) fn confirm_close_accept_via_api(&mut self) {
-        if let Some(ws_idx) = self.state.take_confirmed_workspace_close_index() {
+        if let Some(group_id) = self.state.confirm_close_group_id.take() {
+            self.runtime_group_close("tui.group.close", group_id);
+        } else if let Some(ws_idx) = self.state.take_confirmed_workspace_close_index() {
             self.close_workspace_idx_with_group_via_api(ws_idx);
         }
         self.state.mode = if self.state.active.is_some() {
@@ -1235,12 +1437,12 @@ impl App {
                 leave_modal(&mut self.state);
             }
             (
-                ContextMenuKind::Workspace { ws_idx }
+                ContextMenuKind::Workspace { ws_idx, .. }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },
                 Some("Rename"),
             ) => open_rename_workspace(&mut self.state, &self.terminal_runtimes, ws_idx),
             (
-                ContextMenuKind::Workspace { ws_idx }
+                ContextMenuKind::Workspace { ws_idx, .. }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. },
                 Some("Close" | "Close group"),
             ) => {
@@ -1251,6 +1453,91 @@ impl App {
                     self.close_workspace_idx_with_group_via_api(ws_idx);
                     self.state.mode = Mode::Navigate;
                 }
+            }
+            (
+                ContextMenuKind::Workspace { ws_idx, .. }
+                | ContextMenuKind::GitWorkspace { ws_idx, .. },
+                Some("Move to group..."),
+            ) => {
+                open_group_picker(&mut self.state, ws_idx);
+            }
+            (
+                ContextMenuKind::Workspace { ws_idx, .. }
+                | ContextMenuKind::GitWorkspace { ws_idx, .. },
+                Some("Remove from group"),
+            ) => {
+                if let Some(workspace_id) = self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .map(|workspace| workspace.id.clone())
+                {
+                    self.runtime_group_unassign(
+                        "tui.group.unassign",
+                        crate::api::schema::GroupUnassignParams {
+                            workspace_ids: vec![workspace_id],
+                        },
+                    );
+                }
+                leave_modal(&mut self.state);
+            }
+            (ContextMenuKind::Group { group_idx, .. }, Some("Rename")) => {
+                if let Some(group_id) = self
+                    .state
+                    .groups
+                    .get(group_idx)
+                    .map(|group| group.id.clone())
+                {
+                    open_group_name_rename(&mut self.state, group_id);
+                }
+            }
+            (ContextMenuKind::Group { group_idx, .. }, Some("Ungroup")) => {
+                if let Some(group_id) = self
+                    .state
+                    .groups
+                    .get(group_idx)
+                    .map(|group| group.id.clone())
+                {
+                    self.runtime_group_remove("tui.group.remove", group_id);
+                }
+                leave_modal(&mut self.state);
+            }
+            (ContextMenuKind::Group { group_idx, .. }, Some("Close all in group")) => {
+                if let Some(group_id) = self
+                    .state
+                    .groups
+                    .get(group_idx)
+                    .map(|group| group.id.clone())
+                {
+                    if self.state.confirm_close {
+                        self.state.begin_group_close_confirmation(&group_id);
+                    } else {
+                        self.runtime_group_close("tui.group.close", group_id);
+                        leave_modal(&mut self.state);
+                    }
+                }
+            }
+            (
+                ContextMenuKind::Group {
+                    group_idx,
+                    collapsed,
+                },
+                Some("Collapse" | "Expand"),
+            ) => {
+                if let Some(group_id) = self
+                    .state
+                    .groups
+                    .get(group_idx)
+                    .map(|group| group.id.clone())
+                {
+                    if collapsed {
+                        self.state.collapsed_group_ids.remove(&group_id);
+                    } else {
+                        self.state.collapsed_group_ids.insert(group_id);
+                    }
+                    self.state.mark_session_dirty();
+                }
+                leave_modal(&mut self.state);
             }
             (ContextMenuKind::Tab { ws_idx, tab_idx }, Some("New tab")) => {
                 self.focus_workspace_idx_via_api(ws_idx);
@@ -2209,6 +2496,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed: false,
+                in_group: false,
             },
             x: 0,
             y: 0,
@@ -2417,5 +2705,275 @@ mod tests {
         assert_eq!(app.state.mode, Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
         assert!(app.state.context_menu.is_none());
+    }
+}
+
+#[cfg(test)]
+mod group_modal_tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::super::state_with_workspaces;
+    use super::*;
+    use crate::app::state::{GroupNameTarget, GroupPickerState};
+    use crate::app::App;
+    use crate::workspace::Workspace;
+
+    fn state_with_terminals(names: &[&str]) -> AppState {
+        let mut state = state_with_workspaces(names);
+        state.ensure_test_terminals();
+        state
+    }
+    fn app_with_grouped_workspaces(names: &[&str], grouped: &[usize]) -> (App, String) {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        let group_id = app.state.create_group("Client", grouped).expect("group id");
+        (app, group_id)
+    }
+
+    fn menu_item_index(menu: &ContextMenuState, label: &str) -> usize {
+        menu.items()
+            .iter()
+            .position(|item| *item == label)
+            .unwrap_or_else(|| panic!("menu should offer {label}: {:?}", menu.items()))
+    }
+
+    fn workspace_menu(ws_idx: usize, in_group: bool) -> ContextMenuState {
+        ContextMenuState {
+            kind: ContextMenuKind::Workspace { ws_idx, in_group },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        }
+    }
+
+    fn group_menu(group_idx: usize, collapsed: bool) -> ContextMenuState {
+        ContextMenuState {
+            kind: ContextMenuKind::Group {
+                group_idx,
+                collapsed,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        }
+    }
+
+    #[test]
+    fn context_menu_move_to_group_opens_picker_with_group_entries() {
+        let mut state = state_with_terminals(&["a", "b"]);
+        state.create_group("Client", &[0]).expect("group id");
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let menu = workspace_menu(1, false);
+        let idx = menu_item_index(&menu, "Move to group...");
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+
+        assert_eq!(state.mode, Mode::GroupPicker);
+        let picker = state.group_picker.as_ref().expect("picker state");
+        assert_eq!(picker.entries.len(), 1);
+        assert_eq!(picker.entries[0].name, "Client");
+        assert_eq!(
+            picker.member_workspace_ids,
+            vec![state.workspaces[1].id.clone()]
+        );
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn context_menu_remove_from_group_unassigns_member() {
+        let mut state = state_with_terminals(&["a", "b"]);
+        state.create_group("Client", &[0, 1]).expect("group id");
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let menu = workspace_menu(1, true);
+        let idx = menu_item_index(&menu, "Remove from group");
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+
+        assert_eq!(state.workspaces[1].group_id, None);
+        assert_eq!(state.groups.len(), 1);
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn group_context_menu_ungroup_keeps_workspaces() {
+        let mut state = state_with_terminals(&["a", "b"]);
+        state.create_group("Client", &[0, 1]).expect("group id");
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let menu = group_menu(0, false);
+        let idx = menu_item_index(&menu, "Ungroup");
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+
+        assert_eq!(state.workspaces.len(), 2);
+        assert!(state.groups.is_empty());
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn group_context_menu_close_all_requires_confirmation_then_closes() {
+        let mut state = state_with_terminals(&["a", "b", "c"]);
+        let group_id = state.create_group("Client", &[0, 1]).expect("group id");
+        state.confirm_close = true;
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let menu = group_menu(0, false);
+        let idx = menu_item_index(&menu, "Close all in group");
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+
+        assert_eq!(state.mode, Mode::ConfirmClose);
+        assert_eq!(
+            state.confirm_close_group_id.as_deref(),
+            Some(group_id.as_str())
+        );
+
+        confirm_close_accept(&mut state);
+
+        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.workspaces[0].custom_name.as_deref(), Some("c"));
+        assert!(state.groups.is_empty());
+        state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn group_context_menu_collapse_toggles_state() {
+        let mut state = state_with_terminals(&["a"]);
+        let group_id = state.create_group("Client", &[0]).expect("group id");
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        let menu = group_menu(0, false);
+        let idx = menu_item_index(&menu, "Collapse");
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+        assert!(state.collapsed_group_ids.contains(&group_id));
+
+        let menu = group_menu(0, true);
+        let idx = menu_item_index(&menu, "Expand");
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+        assert!(state.collapsed_group_ids.is_empty());
+    }
+
+    #[test]
+    fn api_context_menu_ungroup_removes_group() {
+        let (mut app, _group_id) = app_with_grouped_workspaces(&["a", "b"], &[0, 1]);
+        let menu = group_menu(0, false);
+        let idx = menu_item_index(&menu, "Ungroup");
+
+        app.apply_context_menu_action_via_api(menu, idx);
+
+        assert_eq!(app.state.workspaces.len(), 2);
+        assert!(app.state.groups.is_empty());
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn api_group_picker_enter_assigns_to_selected_group() {
+        let (mut app, group_id) = app_with_grouped_workspaces(&["a", "b"], &[0]);
+        open_group_picker(&mut app.state, 1);
+        assert_eq!(app.state.mode, Mode::GroupPicker);
+
+        app.handle_group_picker_key_via_api(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            app.state.workspaces[1].group_id.as_deref(),
+            Some(group_id.as_str())
+        );
+        assert_eq!(app.state.group_picker, None);
+        assert_ne!(app.state.mode, Mode::GroupPicker);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn api_group_picker_new_group_row_creates_named_group() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("a")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+
+        open_group_picker(&mut app.state, 0);
+        let picker = app.state.group_picker.as_ref().expect("picker");
+        assert_eq!(picker.selected, picker.new_group_row());
+
+        app.handle_group_picker_key_via_api(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.state.mode, Mode::GroupName);
+        assert!(matches!(
+            app.state.group_name_target,
+            Some(GroupNameTarget::Create { .. })
+        ));
+        assert_eq!(app.state.name_input, "Group");
+
+        app.handle_group_name_key_via_api(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.state.groups.len(), 1);
+        assert_eq!(app.state.groups[0].name, "Group");
+        assert_eq!(
+            app.state.workspaces[0].group_id.as_deref(),
+            Some(app.state.groups[0].id.as_str())
+        );
+        assert_eq!(app.state.group_name_target, None);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn api_group_name_modal_renames_group() {
+        let (mut app, group_id) = app_with_grouped_workspaces(&["a"], &[0]);
+        open_group_name_rename(&mut app.state, group_id.clone());
+        assert_eq!(app.state.mode, Mode::GroupName);
+        assert_eq!(app.state.name_input, "Client");
+
+        app.state.name_input = "Team".to_string();
+        app.handle_group_name_key_via_api(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.state.groups[0].name, "Team");
+        assert_eq!(app.state.group_name_target, None);
+    }
+
+    #[test]
+    fn group_picker_esc_cancels_without_changes() {
+        let (mut app, _group_id) = app_with_grouped_workspaces(&["a", "b"], &[0]);
+        open_group_picker(&mut app.state, 1);
+
+        app.handle_group_picker_key_via_api(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(app.state.group_picker, None);
+        assert_eq!(app.state.workspaces[1].group_id, None);
+    }
+
+    #[test]
+    fn group_picker_state_navigation_clamps() {
+        let mut picker = GroupPickerState {
+            member_workspace_ids: vec!["w1".into()],
+            current_group_id: None,
+            entries: vec![crate::app::state::GroupPickerEntry {
+                group_id: "g1".into(),
+                name: "Client".into(),
+                member_count: 1,
+            }],
+            selected: 0,
+        };
+        picker.select_previous();
+        assert_eq!(picker.selected, 0);
+        picker.select_next();
+        assert_eq!(picker.selected, 1);
+        picker.select_next();
+        assert_eq!(picker.selected, 1);
     }
 }

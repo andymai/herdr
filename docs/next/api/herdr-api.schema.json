@@ -254,6 +254,54 @@
             },
             {
               "properties": {
+                "group": {
+                  "$ref": "#/schemas/event/$defs/GroupInfo"
+                },
+                "type": {
+                  "const": "group_created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "group"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "group": {
+                  "$ref": "#/schemas/event/$defs/GroupInfo"
+                },
+                "type": {
+                  "const": "group_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "group"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "group_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "group_removed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "group_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "type": {
                   "const": "worktree_created",
                   "type": "string"
@@ -736,6 +784,9 @@
             "workspace_moved",
             "workspace_reordered",
             "workspace_focused",
+            "group_created",
+            "group_updated",
+            "group_removed",
             "worktree_created",
             "worktree_opened",
             "worktree_removed",
@@ -756,6 +807,33 @@
             "layout_updated"
           ],
           "type": "string"
+        },
+        "GroupInfo": {
+          "properties": {
+            "collapsed": {
+              "type": "boolean"
+            },
+            "group_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "workspace_ids": {
+              "description": "Member workspace ids in sidebar order.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "group_id",
+            "name",
+            "collapsed",
+            "workspace_ids"
+          ],
+          "type": "object"
         },
         "PaneInfo": {
           "properties": {
@@ -1078,6 +1156,12 @@
             },
             "focused": {
               "type": "boolean"
+            },
+            "group_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "label": {
               "type": "string"
@@ -2089,6 +2173,98 @@
           },
           "required": [
             "match_event"
+          ],
+          "type": "object"
+        },
+        "GroupAssignParams": {
+          "properties": {
+            "group_id": {
+              "type": "string"
+            },
+            "workspace_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "group_id",
+            "workspace_ids"
+          ],
+          "type": "object"
+        },
+        "GroupCreateParams": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "workspace_ids": {
+              "description": "Initial members; groups always have at least one member. Workspaces\nbelonging to a worktree space are expanded to the whole space.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "workspace_ids"
+          ],
+          "type": "object"
+        },
+        "GroupRenameParams": {
+          "properties": {
+            "group_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "group_id",
+            "name"
+          ],
+          "type": "object"
+        },
+        "GroupSetCollapsedParams": {
+          "properties": {
+            "collapsed": {
+              "type": "boolean"
+            },
+            "group_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "group_id",
+            "collapsed"
+          ],
+          "type": "object"
+        },
+        "GroupTarget": {
+          "properties": {
+            "group_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "group_id"
+          ],
+          "type": "object"
+        },
+        "GroupUnassignParams": {
+          "properties": {
+            "workspace_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "workspace_ids"
           ],
           "type": "object"
         },
@@ -3780,6 +3956,42 @@
             {
               "properties": {
                 "type": {
+                  "const": "group.created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "group.updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "group.removed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
                   "const": "worktree.created",
                   "type": "string"
                 }
@@ -4737,6 +4949,150 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/WorkspaceCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.create",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.rename",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupRenameParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.assign",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupAssignParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.unassign",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupUnassignParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.remove",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.close",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "group.set_collapsed",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GroupSetCollapsedParams"
             }
           },
           "required": [
@@ -6542,6 +6898,54 @@
             },
             {
               "properties": {
+                "group": {
+                  "$ref": "#/schemas/success_response/$defs/GroupInfo"
+                },
+                "type": {
+                  "const": "group_created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "group"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "group": {
+                  "$ref": "#/schemas/success_response/$defs/GroupInfo"
+                },
+                "type": {
+                  "const": "group_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "group"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "group_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "group_removed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "group_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "type": {
                   "const": "worktree_created",
                   "type": "string"
@@ -7039,6 +7443,9 @@
             "workspace_moved",
             "workspace_reordered",
             "workspace_focused",
+            "group_created",
+            "group_updated",
+            "group_removed",
             "worktree_created",
             "worktree_opened",
             "worktree_removed",
@@ -7059,6 +7466,33 @@
             "layout_updated"
           ],
           "type": "string"
+        },
+        "GroupInfo": {
+          "properties": {
+            "collapsed": {
+              "type": "boolean"
+            },
+            "group_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "workspace_ids": {
+              "description": "Member workspace ids in sidebar order.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "group_id",
+            "name",
+            "collapsed",
+            "workspace_ids"
+          ],
+          "type": "object"
         },
         "InstalledPluginInfo": {
           "properties": {
@@ -8747,6 +9181,41 @@
             },
             {
               "properties": {
+                "group": {
+                  "$ref": "#/schemas/success_response/$defs/GroupInfo"
+                },
+                "type": {
+                  "const": "group_info",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "group"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/GroupInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "group_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "groups"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "source": {
                   "$ref": "#/schemas/success_response/$defs/WorktreeSourceInfo"
                 },
@@ -9951,6 +10420,12 @@
             },
             "focused": {
               "type": "boolean"
+            },
+            "group_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "label": {
               "type": "string"

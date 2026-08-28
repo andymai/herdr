@@ -713,7 +713,14 @@ impl Palette {
 pub struct WorkspaceCardArea {
     pub ws_idx: usize,
     pub rect: Rect,
-    pub indented: bool,
+    pub depth: u8,
+    pub space_child: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupHeaderArea {
+    pub group_idx: usize,
+    pub rect: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -871,6 +878,7 @@ pub struct ViewState {
     pub layout: ViewLayout,
     pub sidebar_rect: Rect,
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
+    pub group_header_areas: Vec<GroupHeaderArea>,
     pub tab_bar_rect: Rect,
     pub tab_hit_areas: Vec<Rect>,
     pub tab_scroll_left_hit_area: Rect,
@@ -896,6 +904,8 @@ pub enum Mode {
     RenameWorkspace,
     RenameTab,
     RenamePane,
+    GroupName,
+    GroupPicker,
     NewLinkedWorktree,
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
@@ -1193,12 +1203,23 @@ pub struct SettingsState {
 pub(crate) enum WorkspaceDropTarget {
     Before(usize),
     End,
+    IntoGroup {
+        group_idx: usize,
+        /// Member workspace index to insert before; `None` appends at the end
+        /// of the group.
+        before_ws_idx: Option<usize>,
+    },
 }
 
 pub(crate) enum DragTarget {
     WorkspaceReorder {
         source_id: crate::app::InputSourceId,
         source_ws_idx: usize,
+        drop_target: Option<WorkspaceDropTarget>,
+    },
+    GroupReorder {
+        source_id: crate::app::InputSourceId,
+        source_group_idx: usize,
         drop_target: Option<WorkspaceDropTarget>,
     },
     TabReorder {
@@ -1247,6 +1268,12 @@ pub(crate) struct WorkspacePressState {
     pub start_row: u16,
 }
 
+pub(crate) struct GroupHeaderPressState {
+    pub group_idx: usize,
+    pub start_col: u16,
+    pub start_row: u16,
+}
+
 pub(crate) struct TabPressState {
     pub ws_idx: usize,
     pub tab_idx: usize,
@@ -1258,11 +1285,17 @@ pub(crate) struct TabPressState {
 pub enum ContextMenuKind {
     Workspace {
         ws_idx: usize,
+        in_group: bool,
     },
     GitWorkspace {
         ws_idx: usize,
         is_linked_worktree: bool,
         has_worktree_children: bool,
+        collapsed: bool,
+        in_group: bool,
+    },
+    Group {
+        group_idx: usize,
         collapsed: bool,
     },
     Tab {
@@ -1279,6 +1312,48 @@ pub enum ContextMenuKind {
     },
 }
 
+/// What the group-name input modal applies to on confirm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupNameTarget {
+    Create { member_workspace_ids: Vec<String> },
+    Rename { group_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupPickerEntry {
+    pub group_id: String,
+    pub name: String,
+    pub member_count: usize,
+}
+
+/// Move-to-group picker: existing groups plus a final "New group..." row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupPickerState {
+    /// Stable ids of the workspaces being moved (expanded server-side).
+    pub member_workspace_ids: Vec<String>,
+    pub current_group_id: Option<String>,
+    pub entries: Vec<GroupPickerEntry>,
+    pub selected: usize,
+}
+
+impl GroupPickerState {
+    pub fn row_count(&self) -> usize {
+        self.entries.len() + 1
+    }
+
+    pub fn new_group_row(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn select_next(&mut self) {
+        self.selected = (self.selected + 1).min(self.row_count().saturating_sub(1));
+    }
+
+    pub fn select_previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+}
+
 /// Right-click context menu state.
 pub struct ContextMenuState {
     pub kind: ContextMenuKind,
@@ -1289,27 +1364,54 @@ pub struct ContextMenuState {
 
 impl ContextMenuState {
     pub fn items(&self) -> Vec<&'static str> {
+        fn with_group_items(mut items: Vec<&'static str>, in_group: bool) -> Vec<&'static str> {
+            items.push("Move to group...");
+            if in_group {
+                items.push("Remove from group");
+            }
+            items
+        }
         match self.kind {
-            ContextMenuKind::Workspace { .. } => vec!["Rename", "Close"],
+            ContextMenuKind::Workspace { in_group, .. } => {
+                with_group_items(vec!["Rename", "Close"], in_group)
+            }
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
+                in_group,
                 ..
-            } => vec!["Rename", "Close", "New worktree", "Open worktree..."],
+            } => with_group_items(
+                vec!["Rename", "Close", "New worktree", "Open worktree..."],
+                in_group,
+            ),
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: true,
+                in_group,
                 ..
-            } => vec!["Rename", "Close", "Delete worktree checkout..."],
+            } => with_group_items(
+                vec!["Rename", "Close", "Delete worktree checkout..."],
+                in_group,
+            ),
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed,
+                in_group,
                 ..
-            } => vec![
+            } => with_group_items(
+                vec![
+                    "Rename",
+                    "Close group",
+                    "New worktree",
+                    "Open worktree...",
+                    if collapsed { "Expand" } else { "Collapse" },
+                ],
+                in_group,
+            ),
+            ContextMenuKind::Group { collapsed, .. } => vec![
                 "Rename",
-                "Close group",
-                "New worktree",
-                "Open worktree...",
+                "Ungroup",
+                "Close all in group",
                 if collapsed { "Expand" } else { "Collapse" },
             ],
             ContextMenuKind::Tab { .. } => vec!["New tab", "Rename", "Close"],
@@ -1478,6 +1580,12 @@ pub struct AppState {
     pub worktree_remove: Option<WorktreeRemoveState>,
     pub worktree_directory: std::path::PathBuf,
     pub collapsed_space_keys: std::collections::HashSet<String>,
+    /// User-defined workspace groups; membership lives on `Workspace::group_id`.
+    pub groups: Vec<crate::workspace::WorkspaceGroup>,
+    pub collapsed_group_ids: std::collections::HashSet<String>,
+    pub group_name_target: Option<GroupNameTarget>,
+    pub group_picker: Option<GroupPickerState>,
+    pub(crate) confirm_close_group_id: Option<String>,
     pub request_complete_onboarding: bool,
     pub name_input: String,
     pub name_input_replace_on_type: bool,
@@ -1496,6 +1604,8 @@ pub struct AppState {
     pub(crate) drag: Option<DragState>,
     pub(crate) workspace_presses:
         std::collections::HashMap<crate::app::InputSourceId, WorkspacePressState>,
+    pub(crate) group_header_presses:
+        std::collections::HashMap<crate::app::InputSourceId, GroupHeaderPressState>,
     pub(crate) tab_presses: std::collections::HashMap<crate::app::InputSourceId, TabPressState>,
     pub selection: Option<Selection>,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
@@ -1863,6 +1973,11 @@ impl AppState {
             worktree_remove: None,
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             collapsed_space_keys: std::collections::HashSet::new(),
+            groups: Vec::new(),
+            collapsed_group_ids: std::collections::HashSet::new(),
+            group_name_target: None,
+            group_picker: None,
+            confirm_close_group_id: None,
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -1880,6 +1995,7 @@ impl AppState {
                 layout: ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
+                group_header_areas: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
                 tab_scroll_left_hit_area: Rect::default(),
@@ -1894,6 +2010,7 @@ impl AppState {
             },
             drag: None,
             workspace_presses: std::collections::HashMap::new(),
+            group_header_presses: std::collections::HashMap::new(),
             tab_presses: std::collections::HashMap::new(),
             selection: None,
             selection_autoscroll: None,
@@ -2098,6 +2215,10 @@ impl AppState {
                 "empty app state must not keep workspace press state"
             );
             assert!(
+                self.group_header_presses.is_empty(),
+                "empty app state must not keep group header press state"
+            );
+            assert!(
                 self.tab_presses.is_empty(),
                 "empty app state must not keep tab press state"
             );
@@ -2108,6 +2229,14 @@ impl AppState {
             assert!(
                 self.host_mouse_pixels.is_none(),
                 "empty app state must not keep host mouse pixel provenance"
+            );
+            assert!(
+                self.groups.is_empty(),
+                "empty app state must not keep workspace groups"
+            );
+            assert!(
+                self.collapsed_group_ids.is_empty(),
+                "empty app state must not keep collapsed group ids"
             );
             return;
         }
@@ -2162,6 +2291,56 @@ impl AppState {
                     );
                 }
             }
+        }
+
+        let mut group_ids = std::collections::HashSet::new();
+        for group in &self.groups {
+            assert!(
+                group.id.starts_with('g'),
+                "group id {} must use the g prefix",
+                group.id
+            );
+            assert!(
+                group_ids.insert(group.id.as_str()),
+                "duplicate group id {}",
+                group.id
+            );
+            assert!(
+                self.workspaces
+                    .iter()
+                    .any(|ws| ws.group_id.as_deref() == Some(group.id.as_str())),
+                "group {} has no members",
+                group.id
+            );
+        }
+        let mut space_group_ids = std::collections::HashMap::new();
+        for ws in &self.workspaces {
+            if let Some(group_id) = ws.group_id.as_deref() {
+                assert!(
+                    group_ids.contains(group_id),
+                    "workspace {} references missing group {}",
+                    ws.id,
+                    group_id
+                );
+            }
+            if let Some(space) = ws.worktree_space() {
+                let entry = space_group_ids
+                    .entry(space.key.as_str())
+                    .or_insert_with(|| ws.group_id.as_deref());
+                assert_eq!(
+                    *entry,
+                    ws.group_id.as_deref(),
+                    "worktree space {} members disagree on group membership",
+                    space.key
+                );
+            }
+        }
+        for group_id in &self.collapsed_group_ids {
+            assert!(
+                group_ids.contains(group_id.as_str()),
+                "collapsed group id {} references missing group",
+                group_id
+            );
         }
 
         let assert_live_pane = |pane_id: PaneId, context: &str| {
@@ -2260,6 +2439,24 @@ impl AppState {
         if let Some(gesture) = &self.right_click_passthrough {
             assert_live_pane(gesture.pane_info.id, "right-click passthrough gesture");
         }
+        let assert_drop_target = |drop_target: &Option<WorkspaceDropTarget>| match drop_target {
+            Some(WorkspaceDropTarget::Before(ws_idx)) => {
+                assert_workspace_index(*ws_idx, "workspace drag target")
+            }
+            Some(WorkspaceDropTarget::IntoGroup {
+                group_idx,
+                before_ws_idx,
+            }) => {
+                assert!(
+                    *group_idx < self.groups.len(),
+                    "workspace drag target group {group_idx} out of bounds"
+                );
+                if let Some(ws_idx) = before_ws_idx {
+                    assert_workspace_index(*ws_idx, "workspace drag target group member");
+                }
+            }
+            Some(WorkspaceDropTarget::End) | None => {}
+        };
         if let Some(drag) = &self.drag {
             match &drag.target {
                 DragTarget::WorkspaceReorder {
@@ -2268,9 +2465,18 @@ impl AppState {
                     ..
                 } => {
                     assert_workspace_index(*source_ws_idx, "workspace drag source");
-                    if let Some(WorkspaceDropTarget::Before(ws_idx)) = drop_target {
-                        assert_workspace_index(*ws_idx, "workspace drag target");
-                    }
+                    assert_drop_target(drop_target);
+                }
+                DragTarget::GroupReorder {
+                    source_group_idx,
+                    drop_target,
+                    ..
+                } => {
+                    assert!(
+                        *source_group_idx < self.groups.len(),
+                        "group drag source {source_group_idx} out of bounds"
+                    );
+                    assert_drop_target(drop_target);
                 }
                 DragTarget::TabReorder {
                     ws_idx,
@@ -2298,14 +2504,27 @@ impl AppState {
         for press in self.workspace_presses.values() {
             assert_workspace_index(press.ws_idx, "workspace press");
         }
+        for press in self.group_header_presses.values() {
+            assert!(
+                press.group_idx < self.groups.len(),
+                "group header press {} out of bounds",
+                press.group_idx
+            );
+        }
         for press in self.tab_presses.values() {
             assert_tab_index(press.ws_idx, press.tab_idx, "tab press");
         }
         if let Some(menu) = &self.context_menu {
             match menu.kind {
-                ContextMenuKind::Workspace { ws_idx }
+                ContextMenuKind::Workspace { ws_idx, .. }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu workspace")
+                }
+                ContextMenuKind::Group { group_idx, .. } => {
+                    assert!(
+                        group_idx < self.groups.len(),
+                        "context menu group {group_idx} out of bounds"
+                    );
                 }
                 ContextMenuKind::Tab { ws_idx, tab_idx } => {
                     assert_tab_index(ws_idx, tab_idx, "context menu tab")
@@ -2629,6 +2848,7 @@ mod tests {
                 is_linked_worktree: true,
                 has_worktree_children: false,
                 collapsed: false,
+                in_group: false,
             },
             x: 0,
             y: 0,
@@ -2637,7 +2857,12 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "Delete worktree checkout..."]
+            &[
+                "Rename",
+                "Close",
+                "Delete worktree checkout...",
+                "Move to group..."
+            ]
         );
     }
 
@@ -2649,6 +2874,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: false,
                 collapsed: false,
+                in_group: false,
             },
             x: 0,
             y: 0,
@@ -2657,7 +2883,13 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "New worktree", "Open worktree..."]
+            &[
+                "Rename",
+                "Close",
+                "New worktree",
+                "Open worktree...",
+                "Move to group..."
+            ]
         );
     }
 
@@ -2669,6 +2901,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed: false,
+                in_group: false,
             },
             x: 0,
             y: 0,
@@ -2682,7 +2915,8 @@ mod tests {
                 "Close group",
                 "New worktree",
                 "Open worktree...",
-                "Collapse"
+                "Collapse",
+                "Move to group..."
             ]
         );
     }
