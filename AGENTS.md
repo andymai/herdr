@@ -2,6 +2,10 @@
 
 Terminal based agent runtime for coding agents.
 
+## Fork Context
+
+This checkout is the `andymai/herdr` fork (`origin`); the canonical repository is `herdrdev/herdr` (`upstream`). The fork's default branch is `main` and diverges deliberately from upstream `master`. Under Scope and Audience this is a custom fork: skip Maintainer Workflow, Local Can Machine Workflow, and Release Channels actions, and follow the external contributor guardrail for anything sent upstream. Committing and pushing to `origin` is normal fork work.
+
 ## Scope and Audience
 
 These instructions are layered.
@@ -24,6 +28,23 @@ These instructions are layered.
   cannot be determined.
 
 ## Universal Project Rules
+
+### Architecture
+
+One binary (`src/main.rs`, no `lib.rs`), three roles. Bare `herdr` probes the client socket; if no server is listening it spawns `herdr server` as a detached daemon, then runs the TUI client in the current process. The headless server (`src/server/headless.rs`) owns all workspaces, panes, PTYs, and state; clients only forward input and draw frames, and several can attach at once. `--no-session` runs app, PTYs, and TUI monolithically in one process. `--remote <ssh-target>` bridges a local client to a remote server over SSH stdio (`src/remote/`).
+
+Two sockets per session, in the session data dir (`~/.config/herdr`, or `~/.config/herdr/sessions/<name>` for named sessions; debug builds use `herdr-dev`):
+
+- `herdr.sock`: public JSON API (`src/api/`), newline-delimited JSON. Every `herdr <noun> <verb>` CLI subcommand (`src/cli/`) and agent integration goes through it. The schema is generated from `src/api/schema.rs` into `docs/next/api/herdr-api.schema.json`. Path override: `HERDR_SOCKET_PATH`.
+- `herdr-client.sock`: private binary TUI protocol (`src/protocol/wire.rs`), length-prefixed bincode, version-locked by `PROTOCOL_VERSION`. Presentation transport only; see the runtime/client boundary guardrail.
+
+Pane data flow: PTY bytes (`src/pty/`, vendored portable-pty) feed terminal emulation in the vendored libghostty-vt Zig library over FFI (`src/ghostty/`; `build.rs` runs `zig build` and statically links it). `src/pane/` glues per-pane terminal, detection task, and OSC handling; `src/terminal/` holds durable server-owned terminal identity and state. The server renders frames into an in-memory ratatui buffer (`src/server/render_stream.rs`) and fans out per-client diffs. Hidden panes still parse output but skip presentation work.
+
+State hierarchy: `AppState` holds `Workspace` (`src/workspace.rs`), which holds `Tab` (`src/workspace/tab.rs`), which holds a split-tree `TileLayout` (`src/layout.rs`) plus `PaneState` entries. `App` (`src/app/mod.rs`) is the runtime shell around pure-data `AppState` (`src/app/state.rs`). Pane runtimes (PTY actor, ghostty terminal, detection task) live outside `AppState` in `TerminalRuntimeRegistry` (`src/terminal/runtime_registry.rs`). Durable per-terminal facts (agent identity, effective state, title, cwd) live in `TerminalState` (`src/terminal/state.rs`), which arbitrates the detection authorities (integration hooks, screen detection, PTY activity, process exit). `compute_view()` (`src/ui.rs`) does all geometry and mutation; `render()` takes `&AppState` and only draws.
+
+Agent detection (`src/detect/`): TOML manifests in `src/detect/manifests/` classify a bottom-of-buffer screen snapshot plus OSC title/progress into idle, working, or blocked per agent. Source precedence: local override in `~/.config/herdr/agent-detection/`, then cached remote update, then bundled manifest; hot reload via `herdr server reload-agent-manifests`.
+
+Also load-bearing: `src/persist/` (session snapshot and restore across server restarts), `src/handoff_runtime.rs` with `src/server/handoff.rs` (live server replacement passing PTY fds, used by `herdr update --handoff`), `src/integration/` (bundled per-agent hook assets that report agent state over the JSON API), `src/platform/` (OS behavior behind shared traits), `src/config/` (config load and hot reload).
 
 ### Principles
 
@@ -122,12 +143,19 @@ Use `just` recipes by default instead of invoking cargo or scripts directly.
 
 ```bash
 just test               # cargo nextest + maintenance script tests
-just check              # formatting check + cargo nextest + maintenance script tests
+just test-one <filter>  # one nextest filter, e.g. just test-one codex_stale_working
+just lint               # cargo fmt --check + clippy (-D warnings)
+just ci                 # lint + nextest + architecture/integration/marketplace tests
+just check              # ci + Windows-target clippy + maintenance script tests
+just build              # release build
+just install-hooks      # repo-local git hooks from .githooks
 ```
+
+Building needs the pinned Rust toolchain (`rust-toolchain.toml`) and Zig 0.15.2 exactly (on `PATH` or via `ZIG=/path/to/zig`) for the vendored libghostty-vt; `nix develop` provides both. Tests additionally need `cargo-nextest`, `python3` (maintenance tests under `scripts/`), and `bun` (integration asset and worker tests). Debug builds (`cargo build`, `cargo run`) use a separate `herdr-dev` config/state directory and never touch a real `herdr` install; never run `herdr update` from a self-built binary.
 
 Run `just check` before committing unless Can explicitly accepts narrower validation. Do not bypass failing checks; fix the failure or explain exactly why a narrower check is enough.
 
-Unit tests live next to the code (`#[cfg(test)] mod tests`). New `AppState` or `Workspace` behavior should be testable with `AppState::test_new()` and `Workspace::test_new()` without PTYs.
+Unit tests live next to the code (`#[cfg(test)] mod tests`). New `AppState` or `Workspace` behavior should be testable with `AppState::test_new()` and `Workspace::test_new()` without PTYs. End-to-end tests live in `tests/` and exercise real sockets and spawned binaries; the CLI surface is covered under `tests/cli/` with shared helpers in `tests/support/`.
 
 For broad refactors or release-risk regressions, classify the risk before editing. Treat changes as refactor-risk when they touch two or more core surfaces, persisted state, protocol/API IDs, workspace/tab/pane identity, restore/handoff, agent detection authority, or UI/input state projection. Before moving code, identify the protected behavior and add or name characterization tests. Identity/state refactors should use the test-only invariants `AppState::assert_invariants_for_test()` or `Workspace::assert_invariants_for_test()` with adversarial state from `AppState::test_with_adversarial_identity_state()` or `Workspace::test_adversarial_identity_state()`. Run a roundtable for broad refactors and release-risk regressions, not for routine local fixes.
 
