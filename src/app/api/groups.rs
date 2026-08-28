@@ -118,6 +118,30 @@ impl App {
         group_ids
     }
 
+    fn capture_group_memberships(&self) -> Vec<Option<String>> {
+        self.state
+            .workspaces
+            .iter()
+            .map(|ws| ws.group_id.clone())
+            .collect()
+    }
+
+    /// Emit `workspace.updated` for every workspace whose membership changed,
+    /// including space mates the mutation expanded to. Only valid for
+    /// mutations that keep the workspace list itself intact.
+    fn emit_workspace_updates_for_membership_changes(&mut self, previous: &[Option<String>]) {
+        for (ws_idx, previous_group) in previous.iter().enumerate() {
+            let current = self
+                .state
+                .workspaces
+                .get(ws_idx)
+                .and_then(|ws| ws.group_id.as_deref());
+            if current != previous_group.as_deref() {
+                self.emit_workspace_updated(ws_idx);
+            }
+        }
+    }
+
     /// After members leave their previous groups, tell event-driven clients
     /// what happened to each source group: updated when it still has members,
     /// removed when it dissolved.
@@ -159,6 +183,7 @@ impl App {
             Err(response) => return response,
         };
         let previous_group_ids = self.previous_group_ids(&member_indices, None);
+        let previous_memberships = self.capture_group_memberships();
         let Some(group_id) = self.state.create_group(&params.name, &member_indices) else {
             return encode_error(
                 id,
@@ -171,9 +196,7 @@ impl App {
             return encode_error(id, "group_create_failed", "group was not created");
         };
         let group = self.group_info(group_idx);
-        for ws_idx in self.state.group_member_indices(&group_id) {
-            self.emit_workspace_updated(ws_idx);
-        }
+        self.emit_workspace_updates_for_membership_changes(&previous_memberships);
         self.emit_source_group_events(previous_group_ids);
         self.emit_event(EventEnvelope {
             event: EventKind::GroupCreated,
@@ -216,14 +239,13 @@ impl App {
             Err(response) => return response,
         };
         let previous_group_ids = self.previous_group_ids(&member_indices, Some(group_id.as_str()));
+        let previous_memberships = self.capture_group_memberships();
         if self
             .state
             .assign_workspaces_to_group(&group_id, &member_indices)
         {
             self.schedule_session_save();
-            for ws_idx in self.state.group_member_indices(&group_id) {
-                self.emit_workspace_updated(ws_idx);
-            }
+            self.emit_workspace_updates_for_membership_changes(&previous_memberships);
             self.emit_source_group_events(previous_group_ids);
             if let Some(group_idx) = self.state.group_index_by_id(&group_id) {
                 self.emit_group_updated(group_idx);
@@ -250,11 +272,10 @@ impl App {
             Err(response) => return response,
         };
         let previous_group_ids = self.previous_group_ids(&member_indices, None);
+        let previous_memberships = self.capture_group_memberships();
         if self.state.unassign_workspaces(&member_indices) {
             self.schedule_session_save();
-            for ws_idx in member_indices {
-                self.emit_workspace_updated(ws_idx);
-            }
+            self.emit_workspace_updates_for_membership_changes(&previous_memberships);
             self.emit_source_group_events(previous_group_ids);
         }
         encode_success(id, ResponseResult::Ok {})
@@ -614,6 +635,41 @@ mod tests {
             "the shrunken source group must reach event subscribers"
         );
         assert_eq!(app.state.groups.len(), 2);
+    }
+
+    #[test]
+    fn api_group_unassign_emits_workspace_updates_for_space_mates() {
+        let (mut app, event_hub) = app_with_event_hub(&["parent", "linked"]);
+        mark_space(&mut app, 0, "repo-key", false);
+        mark_space(&mut app, 1, "repo-key", true);
+        let parent_id = app.public_workspace_id(0);
+        let linked_id = app.public_workspace_id(1);
+        create_group(&mut app, "Client", vec![parent_id.clone()]);
+
+        let sequence = event_hub.current_sequence();
+        let response = app.handle_group_unassign(
+            "req".into(),
+            GroupUnassignParams {
+                workspace_ids: vec![linked_id.clone()],
+            },
+        );
+        let _: SuccessResponse = serde_json::from_str(&response).expect("success");
+
+        let updated_ids: Vec<String> = event_hub
+            .events_after(sequence)
+            .into_iter()
+            .filter_map(|(_, envelope)| match envelope.data {
+                crate::api::schema::EventData::WorkspaceUpdated { workspace } => {
+                    Some(workspace.workspace_id)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            updated_ids.contains(&parent_id),
+            "space mate must get workspace.updated: {updated_ids:?}"
+        );
+        assert!(updated_ids.contains(&linked_id));
     }
 
     #[test]
