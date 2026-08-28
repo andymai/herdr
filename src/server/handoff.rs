@@ -485,6 +485,8 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
+            groups: Default::default(),
+            collapsed_group_ids: Default::default(),
         }
     }
 

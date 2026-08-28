@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub mod agents;
 pub mod common;
 pub mod events;
+pub mod groups;
 pub mod integrations;
 pub mod panes;
 pub mod plugins;
@@ -16,6 +17,7 @@ pub mod worktrees;
 pub use agents::*;
 pub use common::*;
 pub use events::*;
+pub use groups::*;
 pub use integrations::*;
 pub use panes::*;
 pub use plugins::*;
@@ -81,6 +83,24 @@ pub enum Method {
     WorkspaceReportMetadata(WorkspaceReportMetadataParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
+    #[serde(rename = "group.list")]
+    GroupList(EmptyParams),
+    #[serde(rename = "group.get")]
+    GroupGet(GroupTarget),
+    #[serde(rename = "group.create")]
+    GroupCreate(GroupCreateParams),
+    #[serde(rename = "group.rename")]
+    GroupRename(GroupRenameParams),
+    #[serde(rename = "group.assign")]
+    GroupAssign(GroupAssignParams),
+    #[serde(rename = "group.unassign")]
+    GroupUnassign(GroupUnassignParams),
+    #[serde(rename = "group.remove")]
+    GroupRemove(GroupTarget),
+    #[serde(rename = "group.close")]
+    GroupClose(GroupTarget),
+    #[serde(rename = "group.set_collapsed")]
+    GroupSetCollapsed(GroupSetCollapsedParams),
     #[serde(rename = "worktree.list")]
     WorktreeList(WorktreeListParams),
     #[serde(rename = "worktree.create")]

@@ -1478,6 +1478,9 @@ pub struct AppState {
     pub worktree_remove: Option<WorktreeRemoveState>,
     pub worktree_directory: std::path::PathBuf,
     pub collapsed_space_keys: std::collections::HashSet<String>,
+    /// User-defined workspace groups; membership lives on `Workspace::group_id`.
+    pub groups: Vec<crate::workspace::WorkspaceGroup>,
+    pub collapsed_group_ids: std::collections::HashSet<String>,
     pub request_complete_onboarding: bool,
     pub name_input: String,
     pub name_input_replace_on_type: bool,
@@ -1863,6 +1866,8 @@ impl AppState {
             worktree_remove: None,
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             collapsed_space_keys: std::collections::HashSet::new(),
+            groups: Vec::new(),
+            collapsed_group_ids: std::collections::HashSet::new(),
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -2109,6 +2114,14 @@ impl AppState {
                 self.host_mouse_pixels.is_none(),
                 "empty app state must not keep host mouse pixel provenance"
             );
+            assert!(
+                self.groups.is_empty(),
+                "empty app state must not keep workspace groups"
+            );
+            assert!(
+                self.collapsed_group_ids.is_empty(),
+                "empty app state must not keep collapsed group ids"
+            );
             return;
         }
 
@@ -2162,6 +2175,56 @@ impl AppState {
                     );
                 }
             }
+        }
+
+        let mut group_ids = std::collections::HashSet::new();
+        for group in &self.groups {
+            assert!(
+                group.id.starts_with('g'),
+                "group id {} must use the g prefix",
+                group.id
+            );
+            assert!(
+                group_ids.insert(group.id.as_str()),
+                "duplicate group id {}",
+                group.id
+            );
+            assert!(
+                self.workspaces
+                    .iter()
+                    .any(|ws| ws.group_id.as_deref() == Some(group.id.as_str())),
+                "group {} has no members",
+                group.id
+            );
+        }
+        let mut space_group_ids = std::collections::HashMap::new();
+        for ws in &self.workspaces {
+            if let Some(group_id) = ws.group_id.as_deref() {
+                assert!(
+                    group_ids.contains(group_id),
+                    "workspace {} references missing group {}",
+                    ws.id,
+                    group_id
+                );
+            }
+            if let Some(space) = ws.worktree_space() {
+                let entry = space_group_ids
+                    .entry(space.key.as_str())
+                    .or_insert_with(|| ws.group_id.as_deref());
+                assert_eq!(
+                    *entry,
+                    ws.group_id.as_deref(),
+                    "worktree space {} members disagree on group membership",
+                    space.key
+                );
+            }
+        }
+        for group_id in &self.collapsed_group_ids {
+            assert!(
+                group_ids.contains(group_id.as_str()),
+                "collapsed group id {} references missing group",
+                group_id
+            );
         }
 
         let assert_live_pane = |pane_id: PaneId, context: &str| {

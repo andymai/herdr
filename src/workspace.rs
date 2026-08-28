@@ -31,6 +31,15 @@ pub use self::{
     tab::{NewPane, Tab},
 };
 
+/// A user-defined workspace group. Membership lives on `Workspace::group_id`;
+/// ordering comes from the `AppState::workspaces` order, so a group has no
+/// independent position and never exists empty.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceGroup {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeSpaceMembership {
     pub key: String,
@@ -174,6 +183,41 @@ pub(crate) fn reserve_workspace_ids(workspaces: &[Workspace]) {
     }
 }
 
+static NEXT_GROUP_ID: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn generate_group_id() -> String {
+    let counter = NEXT_GROUP_ID.fetch_add(1, Ordering::Relaxed);
+    format!("g{}", encode_public_number(counter as usize))
+}
+
+pub(crate) fn public_group_number(id: &str) -> Option<usize> {
+    id.strip_prefix('g').and_then(decode_public_number)
+}
+
+pub(crate) fn reserve_group_ids(groups: &[WorkspaceGroup]) {
+    let Some(next) = groups
+        .iter()
+        .filter_map(|group| public_group_number(&group.id))
+        .max()
+        .and_then(|max| u64::try_from(max.checked_add(1)?).ok())
+    else {
+        return;
+    };
+
+    let mut current = NEXT_GROUP_ID.load(Ordering::Relaxed);
+    while current < next {
+        match NEXT_GROUP_ID.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 /// A named workspace containing tabs.
 pub struct Workspace {
     /// Stable public workspace identity, independent of display order.
@@ -196,6 +240,9 @@ pub struct Workspace {
     pub(crate) cached_git_space: Option<GitSpaceMetadata>,
     /// Explicit Herdr-managed worktree grouping provenance.
     pub worktree_space: Option<WorktreeSpaceMembership>,
+    /// User-defined group membership. All workspaces sharing a worktree-space
+    /// key must carry the same value.
+    pub group_id: Option<String>,
     pub(crate) metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub(crate) metadata_token_sequences: HashMap<String, u64>,
     /// Public pane numbers within this workspace. Closed pane numbers are not reused.
@@ -262,6 +309,7 @@ impl Workspace {
             cached_git_ahead_behind: None,
             cached_git_space,
             worktree_space: None,
+            group_id: None,
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,
@@ -461,6 +509,7 @@ impl Workspace {
                 cached_git_ahead_behind: None,
                 cached_git_space,
                 worktree_space: None,
+                group_id: None,
                 metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
                 metadata_token_sequences: HashMap::new(),
                 public_pane_numbers,
@@ -1299,6 +1348,7 @@ impl Workspace {
             cached_git_ahead_behind: None,
             cached_git_space: None,
             worktree_space: None,
+            group_id: None,
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,

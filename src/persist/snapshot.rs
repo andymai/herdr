@@ -26,6 +26,10 @@ pub struct SessionSnapshot {
     pub sidebar_section_split: Option<f32>,
     #[serde(default)]
     pub collapsed_space_keys: std::collections::HashSet<String>,
+    #[serde(default)]
+    pub groups: Vec<crate::workspace::WorkspaceGroup>,
+    #[serde(default)]
+    pub collapsed_group_ids: std::collections::HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +59,8 @@ pub struct WorkspaceSnapshot {
     pub identity_cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_space: Option<crate::workspace::WorktreeSpaceMembership>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
     #[serde(default)]
     pub public_pane_numbers: HashMap<u32, usize>,
     #[serde(default)]
@@ -158,6 +164,7 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
             custom_name: snap.custom_name,
             identity_cwd,
             worktree_space: None,
+            group_id: None,
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -184,6 +191,10 @@ struct RawSessionSnapshot {
     sidebar_section_split: Option<f32>,
     #[serde(default)]
     collapsed_space_keys: std::collections::HashSet<String>,
+    #[serde(default)]
+    groups: Vec<crate::workspace::WorkspaceGroup>,
+    #[serde(default)]
+    collapsed_group_ids: std::collections::HashSet<String>,
 }
 
 fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> {
@@ -199,6 +210,8 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
         sidebar_width: raw.sidebar_width,
         sidebar_section_split: raw.sidebar_section_split,
         collapsed_space_keys: raw.collapsed_space_keys,
+        groups: raw.groups,
+        collapsed_group_ids: raw.collapsed_group_ids,
     })
 }
 
@@ -261,6 +274,8 @@ pub fn capture(
     sidebar_width: u16,
     sidebar_section_split: f32,
     collapsed_space_keys: std::collections::HashSet<String>,
+    groups: Vec<crate::workspace::WorkspaceGroup>,
+    collapsed_group_ids: std::collections::HashSet<String>,
 ) -> SessionSnapshot {
     SessionSnapshot {
         version: SNAPSHOT_VERSION,
@@ -273,6 +288,8 @@ pub fn capture(
         sidebar_width: Some(sidebar_width),
         sidebar_section_split: Some(sidebar_section_split),
         collapsed_space_keys,
+        groups,
+        collapsed_group_ids,
     }
 }
 
@@ -291,6 +308,7 @@ fn capture_workspace(
             .resolved_identity_cwd_from(terminals, terminal_runtimes)
             .unwrap_or_else(|| ws.identity_cwd.clone()),
         worktree_space: ws.worktree_space.clone(),
+        group_id: ws.group_id.clone(),
         public_pane_numbers: ws
             .public_pane_numbers
             .iter()
@@ -541,6 +559,8 @@ mod tests {
             state.sidebar_width,
             state.sidebar_section_split,
             state.collapsed_space_keys.clone(),
+            state.groups.clone(),
+            state.collapsed_group_ids.clone(),
         )
     }
 
@@ -605,6 +625,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            groups: Vec::new(),
+            collapsed_group_ids: std::collections::HashSet::new(),
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored = parse_snapshot(&json).unwrap();
@@ -668,6 +690,7 @@ mod tests {
                 custom_name: Some("pi-mono".to_string()),
                 identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
                 worktree_space: None,
+                group_id: None,
                 public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
                 next_public_pane_number: 3,
                 public_tab_numbers: vec![1],
@@ -692,6 +715,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            groups: Vec::new(),
+            collapsed_group_ids: std::collections::HashSet::new(),
             version: SNAPSHOT_VERSION,
         };
 
@@ -744,6 +769,33 @@ mod tests {
         assert_eq!(snap.sidebar_section_split, Some(0.4));
         assert_eq!(snap.workspaces[0].active_tab, 1);
         assert_eq!(snap.workspaces[1].tabs[0].panes.len(), 2);
+        assert_eq!(snap.workspaces[0].group_id, None);
+        assert_eq!(snap.workspaces[1].group_id.as_deref(), Some("g1"));
+        assert_eq!(snap.groups.len(), 1);
+        assert_eq!(snap.groups[0].id, "g1");
+        assert_eq!(snap.groups[0].name, "Client");
+        assert!(snap.collapsed_group_ids.contains("g1"));
+    }
+
+    #[test]
+    fn capture_round_trips_groups() {
+        let mut state = state_with_workspaces(&["a", "b"]);
+        let group_id = state.create_group("Client", &[0]).expect("group id");
+        state.collapsed_group_ids.insert(group_id.clone());
+
+        let snapshot = capture_from_state(&state);
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let parsed = parse_snapshot(&json).unwrap();
+
+        assert_eq!(parsed.groups.len(), 1);
+        assert_eq!(parsed.groups[0].id, group_id);
+        assert_eq!(parsed.groups[0].name, "Client");
+        assert!(parsed.collapsed_group_ids.contains(&group_id));
+        assert_eq!(
+            parsed.workspaces[0].group_id.as_deref(),
+            Some(group_id.as_str())
+        );
+        assert_eq!(parsed.workspaces[1].group_id, None);
     }
 
     #[test]
@@ -1230,6 +1282,7 @@ mod tests {
                 custom_name: Some("fallback test".to_string()),
                 identity_cwd: PathBuf::from("/tmp"),
                 worktree_space: None,
+                group_id: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1254,6 +1307,8 @@ mod tests {
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
+            groups: Vec::new(),
+            collapsed_group_ids: std::collections::HashSet::new(),
         };
 
         let json = serde_json::to_string(&snap).unwrap();

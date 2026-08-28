@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 mod agent_view;
 mod agents;
 mod env;
+mod groups;
 mod integrations;
 mod layouts;
 mod pane_graphics;
@@ -1032,6 +1033,17 @@ impl App {
             }
             Method::WorkspaceClose(target) => {
                 return self.handle_workspace_close(request.id, target)
+            }
+            Method::GroupList(_) => return self.handle_group_list(request.id),
+            Method::GroupGet(target) => return self.handle_group_get(request.id, target),
+            Method::GroupCreate(params) => return self.handle_group_create(request.id, params),
+            Method::GroupRename(params) => return self.handle_group_rename(request.id, params),
+            Method::GroupAssign(params) => return self.handle_group_assign(request.id, params),
+            Method::GroupUnassign(params) => return self.handle_group_unassign(request.id, params),
+            Method::GroupRemove(target) => return self.handle_group_remove(request.id, target),
+            Method::GroupClose(target) => return self.handle_group_close(request.id, target),
+            Method::GroupSetCollapsed(params) => {
+                return self.handle_group_set_collapsed(request.id, params)
             }
             Method::WorktreeList(params) => return self.handle_worktree_list(request.id, params),
             Method::WorktreeCreate(params) => {

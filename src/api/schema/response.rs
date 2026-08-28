@@ -62,6 +62,12 @@ pub enum ResponseResult {
     WorkspaceList {
         workspaces: Vec<WorkspaceInfo>,
     },
+    GroupInfo {
+        group: super::groups::GroupInfo,
+    },
+    GroupList {
+        groups: Vec<super::groups::GroupInfo>,
+    },
     WorktreeList {
         source: WorktreeSourceInfo,
         worktrees: Vec<WorktreeInfo>,

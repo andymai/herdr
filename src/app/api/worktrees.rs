@@ -452,9 +452,30 @@ impl App {
         membership: crate::workspace::WorktreeSpaceMembership,
         emit_update: bool,
     ) {
+        let space_group_id = self
+            .state
+            .workspaces
+            .iter()
+            .enumerate()
+            .filter(|(idx, ws)| {
+                *idx != ws_idx
+                    && ws
+                        .worktree_space()
+                        .is_some_and(|space| space.key == membership.key)
+            })
+            .find_map(|(_, ws)| ws.group_id.clone());
         let changed = if let Some(workspace) = self.state.workspaces.get_mut(ws_idx) {
-            if workspace.worktree_space.as_ref() == Some(&membership) {
+            let group_changed = if let Some(group_id) = space_group_id {
+                let inherit = workspace.group_id.as_ref() != Some(&group_id);
+                if inherit {
+                    workspace.group_id = Some(group_id);
+                }
+                inherit
+            } else {
                 false
+            };
+            if workspace.worktree_space.as_ref() == Some(&membership) {
+                group_changed
             } else {
                 workspace.worktree_space = Some(membership);
                 true
@@ -653,7 +674,7 @@ impl App {
         });
     }
 
-    fn emit_workspace_updated(&mut self, ws_idx: usize) {
+    pub(super) fn emit_workspace_updated(&mut self, ws_idx: usize) {
         self.emit_event(EventEnvelope {
             event: EventKind::WorkspaceUpdated,
             data: EventData::WorkspaceUpdated {
