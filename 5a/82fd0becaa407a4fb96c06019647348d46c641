@@ -1,0 +1,22 @@
+tests/cli/group.rs
+  s_197d479bb68eef::t_6754d2663a86f8 158-215
+src/app/groups.rs
+  s_197d479bb68eef::t_01610e457cf018 267-283
+  s_197d479bb68eef::t_aaa82b264e0be1 266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5a82fd0becaa407a4fb96c06019647348d46c641",
+  "prompts": {},
+  "sessions": {
+    "s_197d479bb68eef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c109555f-5d39-4881-81d4-e7005967d8b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
