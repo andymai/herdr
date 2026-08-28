@@ -264,6 +264,24 @@ mod tests {
     }
 
     #[test]
+    fn adversarial_identity_state_survives_group_mutations() {
+        let mut state = AppState::test_with_adversarial_identity_state();
+        state.assert_invariants_for_test();
+
+        let group_id = state.create_group("Client", &[0]).expect("group id");
+        state.collapsed_group_ids.insert(group_id.clone());
+        state.assert_invariants_for_test();
+
+        assert!(state.rename_group(&group_id, "Team"));
+        state.assert_invariants_for_test();
+
+        assert!(state.unassign_workspaces(&[0]));
+        state.assert_invariants_for_test();
+        assert!(state.groups.is_empty());
+        assert!(state.collapsed_group_ids.is_empty());
+    }
+
+    #[test]
     fn rename_group_trims_and_rejects_empty() {
         let mut state = app_with_workspaces(&["a"]);
         let group_id = state.create_group("Client", &[0]).expect("group id");

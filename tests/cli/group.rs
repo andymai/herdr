@@ -155,3 +155,61 @@ fn group_close_closes_all_members() {
 
     cleanup_spawned_herdr(herdr, base);
 }
+
+#[test]
+fn server_restart_restores_groups_and_collapse_state() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+
+    let mut herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let first = create_workspace(&socket_path, &base);
+    let _second = create_workspace(&socket_path, &base);
+
+    let created = run_cli_json(
+        &socket_path,
+        &["group", "create", "--name", "Client", &first],
+    );
+    let group_id = created["result"]["group"]["group_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let collapsed = run_cli_json(&socket_path, &["group", "collapse", &group_id]);
+    assert_eq!(collapsed["result"]["group"]["collapsed"], true);
+
+    let stopped = run_cli(&socket_path, &["server", "stop"]);
+    assert!(
+        stopped.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    let pid = herdr.child.process_id();
+    let exit_status = herdr.child.wait().unwrap();
+    unregister_spawned_herdr_pid(pid);
+    assert!(exit_status.success(), "server stop should exit cleanly");
+    drop(herdr);
+
+    let restarted = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let groups = run_cli_json(&socket_path, &["group", "list"]);
+    let restored = &groups["result"]["groups"].as_array().unwrap()[0];
+    assert_eq!(restored["group_id"], group_id.as_str());
+    assert_eq!(restored["name"], "Client");
+    assert_eq!(restored["collapsed"], true);
+    assert_eq!(restored["workspace_ids"].as_array().unwrap().len(), 1);
+
+    let workspaces = run_cli_json(&socket_path, &["workspace", "list"]);
+    let grouped_count = workspaces["result"]["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|workspace| workspace["group_id"] == group_id.as_str())
+        .count();
+    assert_eq!(grouped_count, 1);
+
+    cleanup_spawned_herdr(restarted, base);
+}
