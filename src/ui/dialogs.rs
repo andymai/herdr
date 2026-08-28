@@ -84,6 +84,15 @@ pub(super) fn render_rename_overlay(app: &AppState, frame: &mut Frame, area: Rec
         Mode::RenameTab if app.creating_new_tab => "new tab",
         Mode::RenameTab => "rename tab",
         Mode::RenamePane => "rename pane",
+        Mode::GroupName
+            if matches!(
+                app.group_name_target,
+                Some(crate::app::state::GroupNameTarget::Rename { .. })
+            ) =>
+        {
+            "rename group"
+        }
+        Mode::GroupName => "new group",
         _ => return,
     };
 
@@ -620,6 +629,21 @@ fn confirm_close_overlay_text(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> (String, String) {
+    if let Some(group) = app
+        .confirm_close_group_id
+        .as_deref()
+        .and_then(|group_id| app.groups.iter().find(|group| group.id == group_id))
+    {
+        let member_count = app.group_member_indices(&group.id).len();
+        return (
+            "close all workspaces in group?".to_string(),
+            format!(
+                "{} — closes {member_count} workspace{}",
+                group.name,
+                if member_count == 1 { "" } else { "s" }
+            ),
+        );
+    }
     let ws_name = app
         .workspaces
         .get(app.selected)
@@ -781,6 +805,69 @@ pub(crate) fn confirm_close_button_rects(inner: Rect) -> (Rect, Rect) {
         3,
     );
     (rects[0], rects[1])
+}
+
+pub(super) fn render_group_picker_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
+    super::dim_background(frame, area);
+    let Some(picker) = app.group_picker.as_ref() else {
+        return;
+    };
+
+    let visible_rows = picker.row_count().min(8) as u16;
+    let Some(inner) = render_modal_shell(frame, area, 56, visible_rows + 4, &app.palette) else {
+        return;
+    };
+    if inner.height < 3 {
+        return;
+    }
+
+    render_modal_header(
+        frame,
+        Rect::new(inner.x, inner.y, inner.width, 1),
+        "move to group",
+        &app.palette,
+    );
+
+    let list_top = inner.y + 2;
+    let list_bottom = inner.y + inner.height;
+    let first_visible = picker
+        .selected
+        .saturating_sub(usize::from(visible_rows.saturating_sub(1)));
+    for (row_offset, row) in (first_visible..picker.row_count()).enumerate() {
+        let y = list_top + row_offset as u16;
+        if y >= list_bottom {
+            break;
+        }
+        let highlighted = row == picker.selected;
+        let (label, is_current) = match picker.entries.get(row) {
+            Some(entry) => (
+                format!("{} · {}", entry.name, entry.member_count),
+                picker.current_group_id.as_deref() == Some(entry.group_id.as_str()),
+            ),
+            None => ("New group...".to_string(), false),
+        };
+        let style = if highlighted {
+            Style::default()
+                .fg(panel_contrast_fg(&app.palette))
+                .bg(app.palette.accent)
+                .add_modifier(Modifier::BOLD)
+        } else if is_current {
+            Style::default()
+                .fg(app.palette.text)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.palette.text)
+        };
+        let suffix = if is_current { "  (current)" } else { "" };
+        let text = truncate_end(
+            &format!(" {label}{suffix}"),
+            inner.width.saturating_sub(2) as usize,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(text, style))),
+            Rect::new(inner.x + 1, y, inner.width.saturating_sub(2), 1),
+        );
+    }
 }
 
 #[cfg(test)]

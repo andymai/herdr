@@ -2014,6 +2014,15 @@ impl AppState {
             .position(|workspace| workspace.id == workspace_id)
     }
 
+    pub(crate) fn begin_group_close_confirmation(&mut self, group_id: &str) -> bool {
+        if self.group_index_by_id(group_id).is_none() {
+            return false;
+        }
+        self.confirm_close_group_id = Some(group_id.to_string());
+        self.mode = Mode::ConfirmClose;
+        true
+    }
+
     pub(crate) fn confirm_implicit_worktree_group_close(&mut self, ws_idx: usize) -> bool {
         self.confirm_close
             && self.workspace_close_would_close_worktree_group(ws_idx)

@@ -904,6 +904,8 @@ pub enum Mode {
     RenameWorkspace,
     RenameTab,
     RenamePane,
+    GroupName,
+    GroupPicker,
     NewLinkedWorktree,
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
@@ -1266,11 +1268,17 @@ pub(crate) struct TabPressState {
 pub enum ContextMenuKind {
     Workspace {
         ws_idx: usize,
+        in_group: bool,
     },
     GitWorkspace {
         ws_idx: usize,
         is_linked_worktree: bool,
         has_worktree_children: bool,
+        collapsed: bool,
+        in_group: bool,
+    },
+    Group {
+        group_idx: usize,
         collapsed: bool,
     },
     Tab {
@@ -1287,6 +1295,48 @@ pub enum ContextMenuKind {
     },
 }
 
+/// What the group-name input modal applies to on confirm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupNameTarget {
+    Create { member_workspace_ids: Vec<String> },
+    Rename { group_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupPickerEntry {
+    pub group_id: String,
+    pub name: String,
+    pub member_count: usize,
+}
+
+/// Move-to-group picker: existing groups plus a final "New group..." row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupPickerState {
+    /// Stable ids of the workspaces being moved (expanded server-side).
+    pub member_workspace_ids: Vec<String>,
+    pub current_group_id: Option<String>,
+    pub entries: Vec<GroupPickerEntry>,
+    pub selected: usize,
+}
+
+impl GroupPickerState {
+    pub fn row_count(&self) -> usize {
+        self.entries.len() + 1
+    }
+
+    pub fn new_group_row(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn select_next(&mut self) {
+        self.selected = (self.selected + 1).min(self.row_count().saturating_sub(1));
+    }
+
+    pub fn select_previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+}
+
 /// Right-click context menu state.
 pub struct ContextMenuState {
     pub kind: ContextMenuKind,
@@ -1297,27 +1347,54 @@ pub struct ContextMenuState {
 
 impl ContextMenuState {
     pub fn items(&self) -> Vec<&'static str> {
+        fn with_group_items(mut items: Vec<&'static str>, in_group: bool) -> Vec<&'static str> {
+            items.push("Move to group...");
+            if in_group {
+                items.push("Remove from group");
+            }
+            items
+        }
         match self.kind {
-            ContextMenuKind::Workspace { .. } => vec!["Rename", "Close"],
+            ContextMenuKind::Workspace { in_group, .. } => {
+                with_group_items(vec!["Rename", "Close"], in_group)
+            }
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
+                in_group,
                 ..
-            } => vec!["Rename", "Close", "New worktree", "Open worktree..."],
+            } => with_group_items(
+                vec!["Rename", "Close", "New worktree", "Open worktree..."],
+                in_group,
+            ),
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: true,
+                in_group,
                 ..
-            } => vec!["Rename", "Close", "Delete worktree checkout..."],
+            } => with_group_items(
+                vec!["Rename", "Close", "Delete worktree checkout..."],
+                in_group,
+            ),
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed,
+                in_group,
                 ..
-            } => vec![
+            } => with_group_items(
+                vec![
+                    "Rename",
+                    "Close group",
+                    "New worktree",
+                    "Open worktree...",
+                    if collapsed { "Expand" } else { "Collapse" },
+                ],
+                in_group,
+            ),
+            ContextMenuKind::Group { collapsed, .. } => vec![
                 "Rename",
-                "Close group",
-                "New worktree",
-                "Open worktree...",
+                "Ungroup",
+                "Close all in group",
                 if collapsed { "Expand" } else { "Collapse" },
             ],
             ContextMenuKind::Tab { .. } => vec!["New tab", "Rename", "Close"],
@@ -1489,6 +1566,9 @@ pub struct AppState {
     /// User-defined workspace groups; membership lives on `Workspace::group_id`.
     pub groups: Vec<crate::workspace::WorkspaceGroup>,
     pub collapsed_group_ids: std::collections::HashSet<String>,
+    pub group_name_target: Option<GroupNameTarget>,
+    pub group_picker: Option<GroupPickerState>,
+    pub(crate) confirm_close_group_id: Option<String>,
     pub request_complete_onboarding: bool,
     pub name_input: String,
     pub name_input_replace_on_type: bool,
@@ -1876,6 +1956,9 @@ impl AppState {
             collapsed_space_keys: std::collections::HashSet::new(),
             groups: Vec::new(),
             collapsed_group_ids: std::collections::HashSet::new(),
+            group_name_target: None,
+            group_picker: None,
+            confirm_close_group_id: None,
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -2375,9 +2458,15 @@ impl AppState {
         }
         if let Some(menu) = &self.context_menu {
             match menu.kind {
-                ContextMenuKind::Workspace { ws_idx }
+                ContextMenuKind::Workspace { ws_idx, .. }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu workspace")
+                }
+                ContextMenuKind::Group { group_idx, .. } => {
+                    assert!(
+                        group_idx < self.groups.len(),
+                        "context menu group {group_idx} out of bounds"
+                    );
                 }
                 ContextMenuKind::Tab { ws_idx, tab_idx } => {
                     assert_tab_index(ws_idx, tab_idx, "context menu tab")
@@ -2701,6 +2790,7 @@ mod tests {
                 is_linked_worktree: true,
                 has_worktree_children: false,
                 collapsed: false,
+                in_group: false,
             },
             x: 0,
             y: 0,
@@ -2709,7 +2799,12 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "Delete worktree checkout..."]
+            &[
+                "Rename",
+                "Close",
+                "Delete worktree checkout...",
+                "Move to group..."
+            ]
         );
     }
 
@@ -2721,6 +2816,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: false,
                 collapsed: false,
+                in_group: false,
             },
             x: 0,
             y: 0,
@@ -2729,7 +2825,13 @@ mod tests {
 
         assert_eq!(
             menu.items(),
-            &["Rename", "Close", "New worktree", "Open worktree..."]
+            &[
+                "Rename",
+                "Close",
+                "New worktree",
+                "Open worktree...",
+                "Move to group..."
+            ]
         );
     }
 
@@ -2741,6 +2843,7 @@ mod tests {
                 is_linked_worktree: false,
                 has_worktree_children: true,
                 collapsed: false,
+                in_group: false,
             },
             x: 0,
             y: 0,
@@ -2754,7 +2857,8 @@ mod tests {
                 "Close group",
                 "New worktree",
                 "Open worktree...",
-                "Collapse"
+                "Collapse",
+                "Move to group..."
             ]
         );
     }

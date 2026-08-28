@@ -448,9 +448,10 @@ pub fn render_with_runtime_registry(
             render_context_menu(app, frame);
         }
         Mode::Settings => render_settings_overlay(app, frame, frame.area()),
-        Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
+        Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane | Mode::GroupName => {
             render_rename_overlay(app, frame, frame.area())
         }
+        Mode::GroupPicker => dialogs::render_group_picker_overlay(app, frame, frame.area()),
         Mode::NewLinkedWorktree => render_new_linked_worktree_overlay(app, frame, frame.area()),
         Mode::OpenExistingWorktree => {
             render_open_existing_worktree_overlay(app, frame, frame.area())

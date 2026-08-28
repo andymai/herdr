@@ -601,6 +601,9 @@ impl App {
             collapsed_space_keys,
             groups,
             collapsed_group_ids,
+            group_name_target: None,
+            group_picker: None,
+            confirm_close_group_id: None,
             request_complete_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
@@ -1949,6 +1952,12 @@ impl App {
             }
             Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
                 self.handle_rename_key_via_api(key_event);
+            }
+            Mode::GroupName => {
+                self.handle_group_name_key_via_api(key_event);
+            }
+            Mode::GroupPicker => {
+                self.handle_group_picker_key_via_api(key_event);
             }
             Mode::NewLinkedWorktree => {
                 self.handle_worktree_create_key(key_event);
@@ -6250,7 +6259,10 @@ last_pane = "prefix+tab"
         app.state.selected = 0;
         app.state.confirm_close = false;
         app.state.context_menu = Some(state::ContextMenuState {
-            kind: state::ContextMenuKind::Workspace { ws_idx: 1 },
+            kind: state::ContextMenuKind::Workspace {
+                ws_idx: 1,
+                in_group: false,
+            },
             x: 2,
             y: 2,
             list: state::MenuListState::new(1),

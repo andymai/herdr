@@ -208,6 +208,11 @@ impl App {
                     );
                 }
             }
+            NavigateAction::MoveToGroup => {
+                if let Some(ws_idx) = workspace_action_target(&self.state, context) {
+                    super::modal::open_group_picker(&mut self.state, ws_idx);
+                }
+            }
             NavigateAction::CloseWorkspace => {
                 if let Some(ws_idx) = workspace_action_target(&self.state, context) {
                     self.state.selected = ws_idx;
@@ -1410,6 +1415,7 @@ pub(crate) enum NavigateAction {
     RemoveWorktree,
     RenameWorkspace,
     CloseWorkspace,
+    MoveToGroup,
     SwitchWorkspace(usize),
     SwitchTab(usize),
     FocusAgent(usize),
@@ -1561,6 +1567,7 @@ fn non_indexed_action_for_key(
         (&kb.remove_worktree, NavigateAction::RemoveWorktree),
         (&kb.rename_workspace, NavigateAction::RenameWorkspace),
         (&kb.close_workspace, NavigateAction::CloseWorkspace),
+        (&kb.move_to_group, NavigateAction::MoveToGroup),
         (&kb.previous_workspace, NavigateAction::PreviousWorkspace),
         (&kb.next_workspace, NavigateAction::NextWorkspace),
         (&kb.previous_agent, NavigateAction::PreviousAgent),
@@ -1699,6 +1706,11 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::RenameWorkspace => {
             if let Some(ws_idx) = workspace_action_target(state, context) {
                 super::modal::open_rename_workspace(state, terminal_runtimes, ws_idx);
+            }
+        }
+        NavigateAction::MoveToGroup => {
+            if let Some(ws_idx) = workspace_action_target(state, context) {
+                super::modal::open_group_picker(state, ws_idx);
             }
         }
         NavigateAction::CloseWorkspace => {
@@ -2121,6 +2133,24 @@ mod tests {
         );
 
         assert_eq!(state.mode, Mode::Navigator);
+    }
+
+    #[test]
+    fn move_to_group_key_opens_group_picker() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.keybinds.move_to_group = crate::config::ActionKeybinds::prefix("y");
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()),
+        );
+
+        assert_eq!(state.mode, Mode::GroupPicker);
+        let picker = state.group_picker.as_ref().expect("picker state");
+        assert_eq!(
+            picker.member_workspace_ids,
+            vec![state.workspaces[0].id.clone()]
+        );
     }
 
     #[test]

@@ -316,6 +316,26 @@ impl AppState {
         })
     }
 
+    pub(super) fn group_header_at_row(&self, row: u16) -> Option<usize> {
+        let footer = self.sidebar_footer_rect();
+        if footer == Rect::default() {
+            return None;
+        }
+
+        let headers = if self.view.workspace_card_areas.is_empty()
+            && self.view.group_header_areas.is_empty()
+        {
+            crate::ui::compute_workspace_list_areas(self, self.view.sidebar_rect).1
+        } else {
+            self.view.group_header_areas.clone()
+        };
+
+        headers.iter().find_map(|header| {
+            (row >= header.rect.y && row < header.rect.y + header.rect.height)
+                .then_some(header.group_idx)
+        })
+    }
+
     pub(super) fn collapsed_workspace_at_row(&self, row: u16) -> Option<usize> {
         if !self.sidebar_collapsed {
             return None;

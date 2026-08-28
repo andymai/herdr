@@ -566,20 +566,8 @@ impl AppState {
                         return None;
                     }
 
-                    let headers = if self.view.workspace_card_areas.is_empty()
-                        && self.view.group_header_areas.is_empty()
-                    {
-                        crate::ui::compute_workspace_list_areas(self, self.view.sidebar_rect).1
-                    } else {
-                        self.view.group_header_areas.clone()
-                    };
-                    if let Some(header) = headers.iter().find(|header| {
-                        mouse.row >= header.rect.y
-                            && mouse.row < header.rect.y + header.rect.height
-                            && mouse.column >= header.rect.x
-                            && mouse.column < header.rect.x + header.rect.width
-                    }) {
-                        if let Some(group) = self.groups.get(header.group_idx) {
+                    if let Some(group_idx) = self.group_header_at_row(mouse.row) {
+                        if let Some(group) = self.groups.get(group_idx) {
                             let group_id = group.id.clone();
                             if !self.collapsed_group_ids.remove(&group_id) {
                                 self.collapsed_group_ids.insert(group_id);
@@ -1066,8 +1054,29 @@ impl AppState {
                 {
                     return None;
                 }
+                if let Some(group_idx) = self.group_header_at_row(mouse.row) {
+                    let collapsed = self
+                        .groups
+                        .get(group_idx)
+                        .is_some_and(|group| self.collapsed_group_ids.contains(&group.id));
+                    self.context_menu = Some(ContextMenuState {
+                        kind: ContextMenuKind::Group {
+                            group_idx,
+                            collapsed,
+                        },
+                        x: mouse.column,
+                        y: mouse.row,
+                        list: MenuListState::new(0),
+                    });
+                    self.mode = Mode::ContextMenu;
+                    return None;
+                }
                 if let Some(idx) = self.workspace_at_row(mouse.row) {
                     self.selected = idx;
+                    let in_group = self
+                        .workspaces
+                        .get(idx)
+                        .is_some_and(|ws| ws.group_id.is_some());
                     let kind = self
                         .workspaces
                         .get(idx)
@@ -1097,9 +1106,13 @@ impl AppState {
                                 collapsed: group_state
                                     .as_ref()
                                     .is_some_and(|(_, collapsed)| *collapsed),
+                                in_group,
                             })
                         })
-                        .unwrap_or(ContextMenuKind::Workspace { ws_idx: idx });
+                        .unwrap_or(ContextMenuKind::Workspace {
+                            ws_idx: idx,
+                            in_group,
+                        });
                     self.context_menu = Some(ContextMenuState {
                         kind,
                         x: mouse.column,
@@ -3303,7 +3316,10 @@ mod tests {
     fn hovering_context_menu_updates_highlight() {
         let mut app = app_for_mouse_test();
         app.state.context_menu = Some(ContextMenuState {
-            kind: ContextMenuKind::Workspace { ws_idx: 0 },
+            kind: ContextMenuKind::Workspace {
+                ws_idx: 0,
+                in_group: false,
+            },
             x: 2,
             y: 2,
             list: MenuListState::new(0),
@@ -3597,7 +3613,10 @@ mod tests {
         app.state.mode = Mode::Terminal;
 
         app.state.context_menu = Some(ContextMenuState {
-            kind: ContextMenuKind::Workspace { ws_idx: 1 },
+            kind: ContextMenuKind::Workspace {
+                ws_idx: 1,
+                in_group: false,
+            },
             x: 2,
             y: 2,
             list: MenuListState::new(1),
@@ -3637,7 +3656,10 @@ mod tests {
         app.state.selected = 0;
         app.state.confirm_close = false;
         app.state.context_menu = Some(ContextMenuState {
-            kind: ContextMenuKind::Workspace { ws_idx: 1 },
+            kind: ContextMenuKind::Workspace {
+                ws_idx: 1,
+                in_group: false,
+            },
             x: 2,
             y: 2,
             list: MenuListState::new(1),
