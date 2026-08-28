@@ -1,5 +1,6 @@
 # herdr
 
+> Personal fork of [herdrdev/herdr](https://github.com/herdrdev/herdr), maintained by [@andymai](https://github.com/andymai). Diverges to add changes not in upstream. See [upstream](https://github.com/herdrdev/herdr) for the original project, releases, and docs.
 
 <p align="center">
   <img src="assets/logo.png" alt="herdr" width="100" />
@@ -71,13 +72,17 @@ if you are an ai agent helping with this repository, read [`AGENTS.md`](./AGENTS
 ## development
 
 ```bash
-git clone https://github.com/herdrdev/herdr
+git clone https://github.com/andymai/herdr
 cd herdr
 cargo build --release
 
 just test        # unit tests
 just check       # formatting, tests, and maintenance checks
 ```
+
+Requires `zig` 0.15.2 exactly on `PATH` (or `ZIG=/path/to/zig`) to build the vendored `libghostty-vt`; `nix develop` provides a matching toolchain automatically. On a machine where `$HOME` resolves through a symlink (e.g. Fedora Atomic's `/home -> /var/home`), zig's build-step path resolution can fail with a spurious `FileNotFound` spawning `uucode_build_tables`; fix by pointing `ZIG_GLOBAL_CACHE_DIR`/`ZIG_LOCAL_CACHE_DIR` at the real, non-symlinked path instead of the `$HOME`-relative default. See `.envrc` (gitignored, machine-specific) for a working example.
+
+Debug builds (`cargo build`, `cargo run`) use a separate `herdr-dev` config/state directory, so they never touch a real `herdr` install's config, session state, or socket. Only a `--release` binary run outside of Nix/CI touches the real `~/.config/herdr`. Never run `herdr update` from a self-built binary: it fetches and installs upstream's official release over it.
 
 ## license
 
