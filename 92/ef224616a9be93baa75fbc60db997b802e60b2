@@ -1,0 +1,86 @@
+src/app/input/mouse.rs
+  s_197d479bb68eef::t_2c9803a8465280 1057-1073,1076-1079,1109,1112-1115
+  s_197d479bb68eef::t_88a451a55bf4b8 3319
+  s_197d479bb68eef::t_0a20cc10c19223 569-570
+  s_197d479bb68eef::t_453a6c68cbbac0 3320-3322,3616-3619,3659-3662
+src/app/input/modal.rs
+  s_197d479bb68eef::t_88a451a55bf4b8 2499
+  s_197d479bb68eef::t_813b40b6347aec 815
+  s_197d479bb68eef::t_4a1b8604f18c0d 945,2710-2720,2726-2776,2778-2797,2799-2812,2814-2827,2829-2849,2851-2979
+  s_197d479bb68eef::t_9434ae1bc5d961 1440,1445,1457-1541
+  s_197d479bb68eef::t_88f0313515cc82 2721-2725,2777,2798,2813,2828,2850
+  s_197d479bb68eef::t_44804af9a211a1 797-802
+  s_197d479bb68eef::t_598ab349ac29be 409-464
+  s_197d479bb68eef::t_b8e9466605e682 1131-1210
+  s_197d479bb68eef::t_610c896054a34b 1320-1322
+  s_197d479bb68eef::t_a4986da29f2393 871-872,878-879,890-944
+src/config/model.rs
+  s_197d479bb68eef::t_689adc3555fde7 359-360,493-494,626,731
+  s_197d479bb68eef::t_ba7881ee05419c 1042
+src/config/keybinds.rs
+  s_197d479bb68eef::t_bae7487ab79911 615
+  s_197d479bb68eef::t_54e16f0ded063c 486
+  s_197d479bb68eef::t_9a4d608a1ac7b1 317
+src/app/mod.rs
+  s_197d479bb68eef::t_9e0bb709b3eb08 6262
+  s_197d479bb68eef::t_84ba2f4459cb0f 604-606
+  s_197d479bb68eef::t_55143faece2e0d 1956-1961
+  s_197d479bb68eef::t_d7eafec918ad2f 6263-6265
+src/ui.rs
+  s_197d479bb68eef::t_bacd363569cd42 451,454
+src/app/input/mod.rs
+  s_197d479bb68eef::t_d4d3d3123748d5 738-742
+  s_197d479bb68eef::t_34b034588c822b 106-107
+  s_197d479bb68eef::t_73d383168c467e 214
+src/app/actions.rs
+  s_197d479bb68eef::t_5f055c76836fa4 2017-2025
+src/app/input/sidebar.rs
+  s_197d479bb68eef::t_be52fb2cc94b46 319-338
+src/ui/dialogs.rs
+  s_197d479bb68eef::t_8d7e117ec96ad7 87-95
+  s_197d479bb68eef::t_4d8b45fbe6ce6a 632-646
+  s_197d479bb68eef::t_21c7831d11556d 810-872
+src/ui/keybind_help.rs
+  s_197d479bb68eef::t_ae592b05d1cec2 124
+src/app/runtime_mutations.rs
+  s_197d479bb68eef::t_fd4a0264b27828 2-5
+  s_197d479bb68eef::t_1ea2c4a2320273 58-97
+src/app/state.rs
+  s_197d479bb68eef::t_b5e10f68502ed5 1350-1356,1358-1360,1364,1366-1369,1372,1374-1377,1382,1384-1394,1396-1397
+  s_197d479bb68eef::t_0755dff47fecc2 907-908
+  s_197d479bb68eef::t_f64eec1ccb46ea 2461,2465-2469
+  s_197d479bb68eef::t_263cc52e0f9a11 1569-1571
+  s_197d479bb68eef::t_e982933ddb98ba 1959-1961
+  s_197d479bb68eef::t_88a451a55bf4b8 2793,2819,2846
+  s_197d479bb68eef::t_bb9cedd8d5085f 1271,1278-1281
+  s_197d479bb68eef::t_3e80dbb37e31b5 2802-2807,2828-2834
+  s_197d479bb68eef::t_920b38256fe584 1298-1339
+  s_197d479bb68eef::t_201742bc14e3ed 2860-2861
+  s_197d479bb68eef::t_df3cca9bc23ff1 1282,2470
+src/app/input/navigate.rs
+  s_197d479bb68eef::t_bfb490c91003e3 2139-2154
+  s_197d479bb68eef::t_9ba3d53cd651c1 1711-1715
+  s_197d479bb68eef::t_91c805dae4f9ce 1570
+  s_197d479bb68eef::t_66b9d7e6f5e25f 211-215
+  s_197d479bb68eef::t_37b54b63bb3596 1418
+  s_197d479bb68eef::t_3ab9f3133cd39d 2137-2138
+docs/next/website/src/data/config-reference.json
+  s_197d479bb68eef::t_79f92d33ef1cfc 527-531
+  s_197d479bb68eef::t_eb265b90b6112f 526
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "92ef224616a9be93baa75fbc60db997b802e60b2",
+  "prompts": {},
+  "sessions": {
+    "s_197d479bb68eef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c109555f-5d39-4881-81d4-e7005967d8b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
