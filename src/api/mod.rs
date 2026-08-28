@@ -32,6 +32,13 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::WorkspaceMoveBlock(_)
             | Method::WorkspaceReportMetadata(_)
             | Method::WorkspaceClose(_)
+            | Method::GroupCreate(_)
+            | Method::GroupRename(_)
+            | Method::GroupAssign(_)
+            | Method::GroupUnassign(_)
+            | Method::GroupRemove(_)
+            | Method::GroupClose(_)
+            | Method::GroupSetCollapsed(_)
             | Method::WorktreeCreate(_)
             | Method::WorktreeOpen(_)
             | Method::WorktreeRemove(_)
@@ -92,4 +99,55 @@ pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;
 
 pub fn socket_path() -> PathBuf {
     crate::session::active_api_socket_path()
+}
+
+#[cfg(test)]
+mod request_changes_ui_tests {
+    use super::*;
+    use crate::api::schema::{
+        EmptyParams, GroupCreateParams, GroupSetCollapsedParams, GroupTarget,
+    };
+
+    fn request(method: Method) -> Request {
+        Request {
+            id: "test".into(),
+            method,
+        }
+    }
+
+    #[test]
+    fn group_mutations_mark_the_ui_dirty() {
+        let target = || GroupTarget {
+            group_id: "g1".into(),
+        };
+        for method in [
+            Method::GroupCreate(GroupCreateParams {
+                name: "Client".into(),
+                workspace_ids: vec!["w1".into()],
+            }),
+            Method::GroupRemove(target()),
+            Method::GroupClose(target()),
+            Method::GroupSetCollapsed(GroupSetCollapsedParams {
+                group_id: "g1".into(),
+                collapsed: true,
+            }),
+        ] {
+            assert!(
+                request_changes_ui(&request(method.clone())),
+                "{method:?} must trigger a client re-render"
+            );
+        }
+    }
+
+    #[test]
+    fn group_reads_do_not_mark_the_ui_dirty() {
+        assert!(!request_changes_ui(&request(Method::GroupList(
+            EmptyParams::default()
+        ))));
+        assert!(!request_changes_ui(&request(Method::GroupGet(
+            GroupTarget {
+                group_id: "g1".into(),
+            }
+        ))));
+    }
 }

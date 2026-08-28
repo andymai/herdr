@@ -1246,7 +1246,14 @@ pub(crate) fn workspace_drop_slots(
         }
         None => WorkspaceDropTarget::End,
     };
-    let row = last_rect.y.saturating_add(last_rect.height);
+    let mut row = last_rect.y.saturating_add(last_rect.height);
+    // A trailing group parks its end-of-group slot on this same row; nudge the
+    // top-level slot one row down so dragging out past the group stays possible.
+    if slots.last().is_some_and(|(last_target, last_row)| {
+        matches!(last_target, WorkspaceDropTarget::IntoGroup { .. }) && *last_row == row
+    }) {
+        row = row.saturating_add(1);
+    }
     if row < list_bottom
         && slots
             .last()

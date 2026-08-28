@@ -2169,6 +2169,28 @@ mod group_drop_tests {
     }
 
     #[test]
+    fn end_slot_stays_reachable_below_a_trailing_group() {
+        let (app, _group_id) = app_with_group(&["a", "b"], &[0, 1]);
+        let last_card = *app.state.view.workspace_card_areas.last().unwrap();
+        let group_end_row = last_card.rect.y + last_card.rect.height;
+
+        assert!(matches!(
+            app.state
+                .workspace_drop_target_at_row_for(group_end_row, true),
+            Some(WorkspaceDropTarget::IntoGroup {
+                before_ws_idx: None,
+                ..
+            })
+        ));
+        assert_eq!(
+            app.state
+                .workspace_drop_target_at_row_for(group_end_row + 2, true),
+            Some(WorkspaceDropTarget::End),
+            "rows below the group end slot must resolve to the top level"
+        );
+    }
+
+    #[test]
     fn workspace_drop_plan_into_group_assigns_membership() {
         let (app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
         let plan = app

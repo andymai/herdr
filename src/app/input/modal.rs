@@ -1130,33 +1130,7 @@ impl App {
 
     pub(crate) fn handle_group_name_key_via_api(&mut self, key: KeyEvent) {
         match modal_action_from_key(&key, RENAME_ACTIONS) {
-            Some(ModalAction::Save) => {
-                let name = self.state.name_input.trim().to_string();
-                if name.is_empty() {
-                    return;
-                }
-                match self.state.group_name_target.take() {
-                    Some(crate::app::state::GroupNameTarget::Create {
-                        member_workspace_ids,
-                    }) => {
-                        self.runtime_group_create(
-                            "tui.group.create",
-                            crate::api::schema::GroupCreateParams {
-                                name,
-                                workspace_ids: member_workspace_ids,
-                            },
-                        );
-                    }
-                    Some(crate::app::state::GroupNameTarget::Rename { group_id }) => {
-                        self.runtime_group_rename(
-                            "tui.group.rename",
-                            crate::api::schema::GroupRenameParams { group_id, name },
-                        );
-                    }
-                    None => {}
-                }
-                cancel_group_modal(&mut self.state);
-            }
+            Some(ModalAction::Save) => self.save_group_name_modal_via_api(),
             Some(ModalAction::Clear) => {
                 self.state.name_input.clear();
                 self.state.name_input_replace_on_type = false;
@@ -1164,6 +1138,34 @@ impl App {
             Some(ModalAction::Cancel) => cancel_group_modal(&mut self.state),
             _ => handle_rename_edit_key(&mut self.state, key),
         }
+    }
+
+    fn save_group_name_modal_via_api(&mut self) {
+        let name = self.state.name_input.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        match self.state.group_name_target.take() {
+            Some(crate::app::state::GroupNameTarget::Create {
+                member_workspace_ids,
+            }) => {
+                self.runtime_group_create(
+                    "tui.group.create",
+                    crate::api::schema::GroupCreateParams {
+                        name,
+                        workspace_ids: member_workspace_ids,
+                    },
+                );
+            }
+            Some(crate::app::state::GroupNameTarget::Rename { group_id }) => {
+                self.runtime_group_rename(
+                    "tui.group.rename",
+                    crate::api::schema::GroupRenameParams { group_id, name },
+                );
+            }
+            None => {}
+        }
+        cancel_group_modal(&mut self.state);
     }
 
     pub(crate) fn handle_group_picker_key_via_api(&mut self, key: KeyEvent) {
@@ -1305,6 +1307,18 @@ impl App {
     }
 
     pub(super) fn apply_rename_mouse_action_via_api(&mut self, action: ModalAction) {
+        if self.state.mode == Mode::GroupName {
+            match action {
+                ModalAction::Save => self.save_group_name_modal_via_api(),
+                ModalAction::Clear => {
+                    self.state.name_input.clear();
+                    self.state.name_input_replace_on_type = false;
+                }
+                ModalAction::Cancel => cancel_group_modal(&mut self.state),
+                _ => {}
+            }
+            return;
+        }
         match action {
             ModalAction::Save => self.save_rename_modal_via_api(),
             ModalAction::Clear => {

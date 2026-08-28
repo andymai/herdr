@@ -468,6 +468,9 @@ impl App {
                     MouseAction::RenameModal(action) => {
                         self.apply_rename_mouse_action_via_api(action)
                     }
+                    MouseAction::GroupPickerConfirm => {
+                        self.confirm_group_picker_selection_via_api()
+                    }
                     MouseAction::ConfirmCloseAccept => self.confirm_close_accept_via_api(),
                     MouseAction::ContextMenu { menu, idx } => {
                         self.apply_context_menu_action_via_api(menu, idx)
