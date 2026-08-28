@@ -1,0 +1,24 @@
+src/app/api/groups.rs
+  s_197d479bb68eef::t_27f9efdace8628 121-144
+  s_197d479bb68eef::t_5258d9b66efbf1 186,199
+  s_197d479bb68eef::t_b46594150f9a9a 641-674
+  s_197d479bb68eef::t_30a2b8873b9bd2 242,248
+  s_197d479bb68eef::t_fcd902e7fbb811 275,278
+  s_197d479bb68eef::t_6f952ee523f66e 640
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "65975675ed28b298adc4db0d591c545cc73d1251",
+  "prompts": {},
+  "sessions": {
+    "s_197d479bb68eef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c109555f-5d39-4881-81d4-e7005967d8b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
