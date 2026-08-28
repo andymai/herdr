@@ -1,0 +1,20 @@
+src/ui/dialogs.rs
+  s_197d479bb68eef::t_22a6724d15dee3 641-642
+  s_197d479bb68eef::t_2f0cbf0ccd61f3 946-965
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "99e8d51b0743a51b73d005d8bbabed4526dda216",
+  "prompts": {},
+  "sessions": {
+    "s_197d479bb68eef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c109555f-5d39-4881-81d4-e7005967d8b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
