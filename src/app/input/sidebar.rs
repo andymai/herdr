@@ -397,10 +397,10 @@ impl AppState {
             .into_iter()
             .filter_map(|entry| match entry {
                 crate::ui::WorkspaceListEntry::Workspace {
-                    ws_idx,
-                    indented: false,
+                    ws_idx, depth: 0, ..
                 } => Some(ws_idx),
-                crate::ui::WorkspaceListEntry::Workspace { .. } => None,
+                crate::ui::WorkspaceListEntry::Workspace { .. }
+                | crate::ui::WorkspaceListEntry::GroupHeader { .. } => None,
             })
             .collect::<Vec<_>>();
         let source_pos = roots.iter().position(|ws_idx| *ws_idx == source_ws_idx)?;

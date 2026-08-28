@@ -566,6 +566,29 @@ impl AppState {
                         return None;
                     }
 
+                    let headers = if self.view.workspace_card_areas.is_empty()
+                        && self.view.group_header_areas.is_empty()
+                    {
+                        crate::ui::compute_workspace_list_areas(self, self.view.sidebar_rect).1
+                    } else {
+                        self.view.group_header_areas.clone()
+                    };
+                    if let Some(header) = headers.iter().find(|header| {
+                        mouse.row >= header.rect.y
+                            && mouse.row < header.rect.y + header.rect.height
+                            && mouse.column >= header.rect.x
+                            && mouse.column < header.rect.x + header.rect.width
+                    }) {
+                        if let Some(group) = self.groups.get(header.group_idx) {
+                            let group_id = group.id.clone();
+                            if !self.collapsed_group_ids.remove(&group_id) {
+                                self.collapsed_group_ids.insert(group_id);
+                            }
+                            self.mark_session_dirty();
+                            return None;
+                        }
+                    }
+
                     let cards = if self.view.workspace_card_areas.is_empty() {
                         crate::ui::compute_workspace_card_areas(self, self.view.sidebar_rect)
                     } else {
