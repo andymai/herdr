@@ -4,6 +4,16 @@ use crate::app::state::{AppState, ViewLayout};
 
 use super::ScrollbarClickTarget;
 
+/// Mutations a workspace drop resolves to: an optional membership change plus
+/// an optional reorder. Applied in that order so the rendered result matches
+/// the drop position.
+pub(super) struct WorkspaceDropPlan {
+    pub assign_group_id: Option<String>,
+    pub unassign: bool,
+    pub workspace_ids: Vec<String>,
+    pub move_params: Option<crate::api::schema::WorkspaceMoveBlockParams>,
+}
+
 impl AppState {
     pub(super) fn workspace_list_rect(&self) -> Rect {
         let sidebar = self.view.sidebar_rect;
@@ -382,6 +392,14 @@ impl AppState {
         &self,
         row: u16,
     ) -> Option<crate::app::state::WorkspaceDropTarget> {
+        self.workspace_drop_target_at_row_for(row, true)
+    }
+
+    pub(super) fn workspace_drop_target_at_row_for(
+        &self,
+        row: u16,
+        allow_into_groups: bool,
+    ) -> Option<crate::app::state::WorkspaceDropTarget> {
         let area = self.workspace_list_rect();
         let footer = self.sidebar_footer_rect();
         if area == Rect::default() || row < area.y || row >= footer.y {
@@ -393,11 +411,165 @@ impl AppState {
         } else {
             self.view.workspace_card_areas.clone()
         };
-        crate::ui::workspace_drop_slots(self, &cards, area)
+        crate::ui::workspace_drop_slots(self, &cards, area, allow_into_groups)
             .into_iter()
             .enumerate()
             .min_by_key(|(slot_idx, (_, slot_row))| (row.abs_diff(*slot_row), *slot_idx))
             .map(|(_, (target, _))| target)
+    }
+
+    /// Anchor workspace id a top-level drop should insert before: `None` for
+    /// the list end, gathered to the first member for space and group blocks.
+    fn top_level_drop_anchor(
+        &self,
+        drop_target: crate::app::state::WorkspaceDropTarget,
+    ) -> Option<Option<String>> {
+        match drop_target {
+            crate::app::state::WorkspaceDropTarget::Before(target_ws_idx) => {
+                let target = self.workspaces.get(target_ws_idx)?;
+                if let Some(group_id) = target.group_id.as_deref() {
+                    let first = self.group_member_indices(group_id).first().copied()?;
+                    return Some(Some(self.workspaces.get(first)?.id.clone()));
+                }
+                let anchor = match crate::ui::workspace_parent_group_state(self, target_ws_idx)
+                    .and_then(|_| target.worktree_space())
+                {
+                    Some(target_space) => self
+                        .workspaces
+                        .iter()
+                        .find(|workspace| {
+                            workspace
+                                .worktree_space()
+                                .is_some_and(|space| space.key == target_space.key)
+                        })
+                        .unwrap_or(target),
+                    None => target,
+                };
+                Some(Some(anchor.id.clone()))
+            }
+            crate::app::state::WorkspaceDropTarget::End => Some(None),
+            crate::app::state::WorkspaceDropTarget::IntoGroup { .. } => None,
+        }
+    }
+
+    /// Source workspace plus its whole worktree space, source first.
+    fn workspace_block_ids(&self, source_ws_idx: usize) -> Option<Vec<String>> {
+        let source = self.workspaces.get(source_ws_idx)?;
+        let mut ids = vec![source.id.clone()];
+        if let Some(source_space) = source.worktree_space() {
+            ids.extend(
+                self.workspaces
+                    .iter()
+                    .filter(|workspace| workspace.id != source.id)
+                    .filter(|workspace| {
+                        workspace
+                            .worktree_space()
+                            .is_some_and(|space| space.key == source_space.key)
+                    })
+                    .map(|workspace| workspace.id.clone()),
+            );
+        }
+        Some(ids)
+    }
+
+    /// Resolve a drop of `source_ws_idx` that changes group membership: into a
+    /// group, within its group, or out of its group to the top level. Ungrouped
+    /// sources dropping at the top level are not handled here.
+    pub(super) fn workspace_drop_plan(
+        &self,
+        source_ws_idx: usize,
+        drop_target: crate::app::state::WorkspaceDropTarget,
+    ) -> Option<WorkspaceDropPlan> {
+        let source = self.workspaces.get(source_ws_idx)?;
+        if source
+            .worktree_space()
+            .is_some_and(|space| space.is_linked_worktree)
+        {
+            return None;
+        }
+        let workspace_ids = self.workspace_block_ids(source_ws_idx)?;
+
+        match drop_target {
+            crate::app::state::WorkspaceDropTarget::IntoGroup {
+                group_idx,
+                before_ws_idx,
+            } => {
+                let target_group_id = self.groups.get(group_idx)?.id.clone();
+                let assign_group_id = (source.group_id.as_deref()
+                    != Some(target_group_id.as_str()))
+                .then(|| target_group_id.clone());
+                let before_workspace_id = match before_ws_idx {
+                    Some(idx) => Some(self.workspaces.get(idx)?.id.clone()),
+                    None => self
+                        .group_member_indices(&target_group_id)
+                        .last()
+                        .and_then(|last| self.workspaces.get(last + 1))
+                        .map(|workspace| workspace.id.clone()),
+                };
+                let move_params = match &before_workspace_id {
+                    Some(id) if workspace_ids.contains(id) => None,
+                    _ => Some(crate::api::schema::WorkspaceMoveBlockParams {
+                        workspace_ids: workspace_ids.clone(),
+                        before_workspace_id,
+                    }),
+                };
+                if assign_group_id.is_none() && move_params.is_none() {
+                    return None;
+                }
+                Some(WorkspaceDropPlan {
+                    assign_group_id,
+                    unassign: false,
+                    workspace_ids,
+                    move_params,
+                })
+            }
+            crate::app::state::WorkspaceDropTarget::Before(_)
+            | crate::app::state::WorkspaceDropTarget::End => {
+                source.group_id.as_ref()?;
+                let before_workspace_id = self.top_level_drop_anchor(drop_target)?;
+                let move_params = match &before_workspace_id {
+                    Some(id) if workspace_ids.contains(id) => None,
+                    _ => Some(crate::api::schema::WorkspaceMoveBlockParams {
+                        workspace_ids: workspace_ids.clone(),
+                        before_workspace_id,
+                    }),
+                };
+                Some(WorkspaceDropPlan {
+                    assign_group_id: None,
+                    unassign: true,
+                    workspace_ids,
+                    move_params,
+                })
+            }
+        }
+    }
+
+    /// Reorder a whole group as one block: all member ids in workspace order.
+    pub(super) fn group_move_block_params(
+        &self,
+        source_group_idx: usize,
+        drop_target: crate::app::state::WorkspaceDropTarget,
+    ) -> Option<crate::api::schema::WorkspaceMoveBlockParams> {
+        let group_id = self.groups.get(source_group_idx)?.id.clone();
+        let workspace_ids = self
+            .group_member_indices(&group_id)
+            .into_iter()
+            .filter_map(|idx| self.workspaces.get(idx))
+            .map(|workspace| workspace.id.clone())
+            .collect::<Vec<_>>();
+        if workspace_ids.is_empty() {
+            return None;
+        }
+        let before_workspace_id = self.top_level_drop_anchor(drop_target)?;
+        if let Some(id) = &before_workspace_id {
+            if workspace_ids.contains(id) {
+                return None;
+            }
+        }
+        Some(crate::api::schema::WorkspaceMoveBlockParams {
+            workspace_ids,
+            before_workspace_id,
+        })
     }
 
     pub(super) fn workspace_move_block_params(
@@ -434,50 +606,14 @@ impl AppState {
                 .iter()
                 .position(|ws_idx| *ws_idx == target_ws_idx)?,
             crate::app::state::WorkspaceDropTarget::End => remaining_roots.len(),
+            crate::app::state::WorkspaceDropTarget::IntoGroup { .. } => return None,
         };
         if insert_pos == source_pos {
             return None;
         }
 
-        let workspace_ids = match source.worktree_space() {
-            Some(source_space) => {
-                let mut ids = vec![source.id.clone()];
-                ids.extend(
-                    self.workspaces
-                        .iter()
-                        .filter(|workspace| workspace.id != source.id)
-                        .filter(|workspace| {
-                            workspace
-                                .worktree_space()
-                                .is_some_and(|space| space.key == source_space.key)
-                        })
-                        .map(|workspace| workspace.id.clone()),
-                );
-                ids
-            }
-            None => vec![source.id.clone()],
-        };
-        let before_workspace_id = match drop_target {
-            crate::app::state::WorkspaceDropTarget::Before(target_ws_idx) => {
-                let target = self.workspaces.get(target_ws_idx)?;
-                let anchor = match crate::ui::workspace_parent_group_state(self, target_ws_idx)
-                    .and_then(|_| target.worktree_space())
-                {
-                    Some(target_space) => self
-                        .workspaces
-                        .iter()
-                        .find(|workspace| {
-                            workspace
-                                .worktree_space()
-                                .is_some_and(|space| space.key == target_space.key)
-                        })
-                        .unwrap_or(target),
-                    None => target,
-                };
-                Some(anchor.id.clone())
-            }
-            crate::app::state::WorkspaceDropTarget::End => None,
-        };
+        let workspace_ids = self.workspace_block_ids(source_ws_idx)?;
+        let before_workspace_id = self.top_level_drop_anchor(drop_target)?;
 
         Some(crate::api::schema::WorkspaceMoveBlockParams {
             workspace_ids,
@@ -1952,5 +2088,167 @@ mod tests {
         assert!(app.state.drag.is_none());
         let snapshot = capture_snapshot(&app.state);
         assert_eq!(snapshot.sidebar_width, Some(26));
+    }
+}
+
+#[cfg(test)]
+mod group_drop_tests {
+    use ratatui::layout::Rect;
+
+    use super::super::app_for_mouse_test;
+    use crate::app::state::WorkspaceDropTarget;
+    use crate::workspace::Workspace;
+
+    fn app_with_group(names: &[&str], grouped: &[usize]) -> (crate::app::App, String) {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let group_id = app.state.create_group("Client", grouped).expect("group id");
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 40));
+        (app, group_id)
+    }
+
+    #[test]
+    fn drop_slots_offer_into_group_positions_for_workspace_drags() {
+        let (app, _group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let footer_y = app.state.sidebar_footer_rect().y;
+        let targets: Vec<WorkspaceDropTarget> = (0..footer_y)
+            .filter_map(|row| app.state.workspace_drop_target_at_row_for(row, true))
+            .collect();
+
+        assert!(targets.iter().any(|target| matches!(
+            target,
+            WorkspaceDropTarget::IntoGroup {
+                before_ws_idx: Some(0),
+                ..
+            }
+        )));
+        assert!(targets.iter().any(|target| matches!(
+            target,
+            WorkspaceDropTarget::IntoGroup {
+                before_ws_idx: Some(1),
+                ..
+            }
+        )));
+        assert!(targets
+            .iter()
+            .any(|target| matches!(target, WorkspaceDropTarget::Before(_))));
+    }
+
+    #[test]
+    fn group_drags_never_resolve_into_group_slots() {
+        let (app, _group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let footer_y = app.state.sidebar_footer_rect().y;
+        for row in 0..footer_y {
+            if let Some(target) = app.state.workspace_drop_target_at_row_for(row, false) {
+                assert!(
+                    !matches!(target, WorkspaceDropTarget::IntoGroup { .. }),
+                    "row {row} resolved into a group for a group drag"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_group_header_offers_into_group_slot() {
+        let (mut app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        app.state.collapsed_group_ids.insert(group_id);
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 40));
+        let header = app.state.view.group_header_areas[0];
+
+        assert!(matches!(
+            app.state
+                .workspace_drop_target_at_row_for(header.rect.y, true),
+            Some(WorkspaceDropTarget::IntoGroup {
+                before_ws_idx: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn workspace_drop_plan_into_group_assigns_membership() {
+        let (app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let plan = app
+            .state
+            .workspace_drop_plan(
+                2,
+                WorkspaceDropTarget::IntoGroup {
+                    group_idx: 0,
+                    before_ws_idx: Some(1),
+                },
+            )
+            .expect("plan");
+
+        assert_eq!(plan.assign_group_id.as_deref(), Some(group_id.as_str()));
+        assert!(!plan.unassign);
+        assert_eq!(plan.workspace_ids, vec![app.state.workspaces[2].id.clone()]);
+        let params = plan.move_params.expect("move params");
+        assert_eq!(
+            params.before_workspace_id.as_deref(),
+            Some(app.state.workspaces[1].id.as_str())
+        );
+    }
+
+    #[test]
+    fn workspace_drop_plan_out_of_group_unassigns() {
+        let (app, _group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let plan = app
+            .state
+            .workspace_drop_plan(0, WorkspaceDropTarget::End)
+            .expect("plan");
+
+        assert_eq!(plan.assign_group_id, None);
+        assert!(plan.unassign);
+        let params = plan.move_params.expect("move params");
+        assert_eq!(params.before_workspace_id, None);
+    }
+
+    #[test]
+    fn workspace_drop_plan_within_group_reorders_without_assign() {
+        let (app, _group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let plan = app
+            .state
+            .workspace_drop_plan(
+                0,
+                WorkspaceDropTarget::IntoGroup {
+                    group_idx: 0,
+                    before_ws_idx: None,
+                },
+            )
+            .expect("plan");
+
+        assert_eq!(plan.assign_group_id, None);
+        assert!(!plan.unassign);
+        let params = plan.move_params.expect("move params");
+        assert_eq!(
+            params.before_workspace_id.as_deref(),
+            Some(app.state.workspaces[2].id.as_str())
+        );
+    }
+
+    #[test]
+    fn group_move_block_params_moves_all_members() {
+        let (app, _group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let params = app
+            .state
+            .group_move_block_params(0, WorkspaceDropTarget::End)
+            .expect("params");
+
+        assert_eq!(
+            params.workspace_ids,
+            vec![
+                app.state.workspaces[0].id.clone(),
+                app.state.workspaces[1].id.clone(),
+            ]
+        );
+        assert_eq!(params.before_workspace_id, None);
+
+        assert!(app
+            .state
+            .group_move_block_params(0, WorkspaceDropTarget::Before(1))
+            .is_none());
     }
 }

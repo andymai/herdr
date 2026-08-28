@@ -1203,12 +1203,23 @@ pub struct SettingsState {
 pub(crate) enum WorkspaceDropTarget {
     Before(usize),
     End,
+    IntoGroup {
+        group_idx: usize,
+        /// Member workspace index to insert before; `None` appends at the end
+        /// of the group.
+        before_ws_idx: Option<usize>,
+    },
 }
 
 pub(crate) enum DragTarget {
     WorkspaceReorder {
         source_id: crate::app::InputSourceId,
         source_ws_idx: usize,
+        drop_target: Option<WorkspaceDropTarget>,
+    },
+    GroupReorder {
+        source_id: crate::app::InputSourceId,
+        source_group_idx: usize,
         drop_target: Option<WorkspaceDropTarget>,
     },
     TabReorder {
@@ -1253,6 +1264,12 @@ pub(crate) struct DragState {
 
 pub(crate) struct WorkspacePressState {
     pub ws_idx: usize,
+    pub start_col: u16,
+    pub start_row: u16,
+}
+
+pub(crate) struct GroupHeaderPressState {
+    pub group_idx: usize,
     pub start_col: u16,
     pub start_row: u16,
 }
@@ -1587,6 +1604,8 @@ pub struct AppState {
     pub(crate) drag: Option<DragState>,
     pub(crate) workspace_presses:
         std::collections::HashMap<crate::app::InputSourceId, WorkspacePressState>,
+    pub(crate) group_header_presses:
+        std::collections::HashMap<crate::app::InputSourceId, GroupHeaderPressState>,
     pub(crate) tab_presses: std::collections::HashMap<crate::app::InputSourceId, TabPressState>,
     pub selection: Option<Selection>,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
@@ -1991,6 +2010,7 @@ impl AppState {
             },
             drag: None,
             workspace_presses: std::collections::HashMap::new(),
+            group_header_presses: std::collections::HashMap::new(),
             tab_presses: std::collections::HashMap::new(),
             selection: None,
             selection_autoscroll: None,
@@ -2193,6 +2213,10 @@ impl AppState {
             assert!(
                 self.workspace_presses.is_empty(),
                 "empty app state must not keep workspace press state"
+            );
+            assert!(
+                self.group_header_presses.is_empty(),
+                "empty app state must not keep group header press state"
             );
             assert!(
                 self.tab_presses.is_empty(),
@@ -2415,6 +2439,24 @@ impl AppState {
         if let Some(gesture) = &self.right_click_passthrough {
             assert_live_pane(gesture.pane_info.id, "right-click passthrough gesture");
         }
+        let assert_drop_target = |drop_target: &Option<WorkspaceDropTarget>| match drop_target {
+            Some(WorkspaceDropTarget::Before(ws_idx)) => {
+                assert_workspace_index(*ws_idx, "workspace drag target")
+            }
+            Some(WorkspaceDropTarget::IntoGroup {
+                group_idx,
+                before_ws_idx,
+            }) => {
+                assert!(
+                    *group_idx < self.groups.len(),
+                    "workspace drag target group {group_idx} out of bounds"
+                );
+                if let Some(ws_idx) = before_ws_idx {
+                    assert_workspace_index(*ws_idx, "workspace drag target group member");
+                }
+            }
+            Some(WorkspaceDropTarget::End) | None => {}
+        };
         if let Some(drag) = &self.drag {
             match &drag.target {
                 DragTarget::WorkspaceReorder {
@@ -2423,9 +2465,18 @@ impl AppState {
                     ..
                 } => {
                     assert_workspace_index(*source_ws_idx, "workspace drag source");
-                    if let Some(WorkspaceDropTarget::Before(ws_idx)) = drop_target {
-                        assert_workspace_index(*ws_idx, "workspace drag target");
-                    }
+                    assert_drop_target(drop_target);
+                }
+                DragTarget::GroupReorder {
+                    source_group_idx,
+                    drop_target,
+                    ..
+                } => {
+                    assert!(
+                        *source_group_idx < self.groups.len(),
+                        "group drag source {source_group_idx} out of bounds"
+                    );
+                    assert_drop_target(drop_target);
                 }
                 DragTarget::TabReorder {
                     ws_idx,
@@ -2452,6 +2503,13 @@ impl AppState {
         }
         for press in self.workspace_presses.values() {
             assert_workspace_index(press.ws_idx, "workspace press");
+        }
+        for press in self.group_header_presses.values() {
+            assert!(
+                press.group_idx < self.groups.len(),
+                "group header press {} out of bounds",
+                press.group_idx
+            );
         }
         for press in self.tab_presses.values() {
             assert_tab_index(press.ws_idx, press.tab_idx, "tab press");

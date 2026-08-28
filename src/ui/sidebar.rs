@@ -1072,12 +1072,31 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
     render_sidebar_toggle(app, frame, area, true, p);
 }
 
+fn group_header_areas_for_slots(app: &AppState) -> Vec<crate::app::state::GroupHeaderArea> {
+    if !app.view.group_header_areas.is_empty() || !app.view.workspace_card_areas.is_empty() {
+        app.view.group_header_areas.clone()
+    } else {
+        compute_workspace_list_areas(app, app.view.sidebar_rect).1
+    }
+}
+
+/// First member's workspace index: the position a group renders at, and the
+/// anchor a drop lands before when targeting the row above the group.
+fn group_block_anchor(app: &AppState, group_idx: usize) -> Option<usize> {
+    let group = app.groups.get(group_idx)?;
+    app.group_member_indices(&group.id).first().copied()
+}
+
 pub(crate) fn workspace_drop_slots(
     app: &AppState,
     cards: &[crate::app::state::WorkspaceCardArea],
     area: Rect,
+    allow_into_groups: bool,
 ) -> Vec<(crate::app::state::WorkspaceDropTarget, u16)> {
-    if area.height == 0 || cards.is_empty() {
+    use crate::app::state::WorkspaceDropTarget;
+
+    let headers = group_header_areas_for_slots(app);
+    if area.height == 0 || (cards.is_empty() && headers.is_empty()) {
         return Vec::new();
     }
     let list_bottom = area.y + area.height.saturating_sub(1);
@@ -1093,8 +1112,8 @@ pub(crate) fn workspace_drop_slots(
             )
         })
     };
-    // Rows inside a user group produce no slots yet; the walk stops at the
-    // group header instead of escaping to an earlier top-level block.
+    // Rows inside a user group belong to the group's block; the walk stops at
+    // the group header instead of escaping to an earlier top-level block.
     let block_root_at = |entry_idx: usize| {
         for entry in entries[..=entry_idx].iter().rev() {
             match entry {
@@ -1108,7 +1127,9 @@ pub(crate) fn workspace_drop_slots(
         None
     };
 
-    let mut slots = Vec::new();
+    // Top-level block starts, in visual order: depth-0 workspace blocks plus
+    // whole groups (anchored at their first member).
+    let mut block_starts = Vec::new();
     let mut previous_root = None;
     for card in cards {
         let Some(entry_idx) = entry_position(card.ws_idx) else {
@@ -1121,37 +1142,111 @@ pub(crate) fn workspace_drop_slots(
             continue;
         }
         previous_root = Some(root_idx);
-        if let Some(row) = card.rect.y.checked_sub(1).filter(|row| *row < list_bottom) {
-            slots.push((
-                crate::app::state::WorkspaceDropTarget::Before(root_idx),
-                row,
-            ));
+        block_starts.push((WorkspaceDropTarget::Before(root_idx), card.rect.y));
+    }
+    for header in &headers {
+        if let Some(anchor) = group_block_anchor(app, header.group_idx) {
+            block_starts.push((WorkspaceDropTarget::Before(anchor), header.rect.y));
+        }
+    }
+    block_starts.sort_by_key(|(_, y)| *y);
+
+    let mut slots = Vec::new();
+    for (target, block_y) in block_starts {
+        if let Some(row) = block_y.checked_sub(1).filter(|row| *row < list_bottom) {
+            slots.push((target, row));
         }
     }
 
-    let Some(last) = cards.last() else {
-        return slots;
+    if allow_into_groups {
+        for header in &headers {
+            let Some(group) = app.groups.get(header.group_idx) else {
+                continue;
+            };
+            if app.collapsed_group_ids.contains(&group.id) {
+                if header.rect.y < list_bottom {
+                    slots.push((
+                        WorkspaceDropTarget::IntoGroup {
+                            group_idx: header.group_idx,
+                            before_ws_idx: None,
+                        },
+                        header.rect.y,
+                    ));
+                }
+                continue;
+            }
+            let mut member_bottom = header.rect.y.saturating_add(header.rect.height);
+            for card in cards {
+                let is_member = app
+                    .workspaces
+                    .get(card.ws_idx)
+                    .is_some_and(|ws| ws.group_id.as_deref() == Some(group.id.as_str()));
+                if !is_member {
+                    continue;
+                }
+                if card.depth == 1 {
+                    if let Some(row) = card.rect.y.checked_sub(1).filter(|row| *row < list_bottom) {
+                        slots.push((
+                            WorkspaceDropTarget::IntoGroup {
+                                group_idx: header.group_idx,
+                                before_ws_idx: Some(card.ws_idx),
+                            },
+                            row,
+                        ));
+                    }
+                }
+                member_bottom = member_bottom.max(card.rect.y.saturating_add(card.rect.height));
+            }
+            if member_bottom < list_bottom {
+                slots.push((
+                    WorkspaceDropTarget::IntoGroup {
+                        group_idx: header.group_idx,
+                        before_ws_idx: None,
+                    },
+                    member_bottom,
+                ));
+            }
+        }
+    }
+
+    // Tail slot after the last visible row.
+    let last_card_entry = cards
+        .iter()
+        .max_by_key(|card| card.rect.y)
+        .and_then(|card| Some((entry_position(card.ws_idx)?, card.rect)));
+    let last_header_entry = headers
+        .iter()
+        .max_by_key(|header| header.rect.y)
+        .and_then(|header| {
+            let entry_idx = entries.iter().position(|entry| {
+                matches!(
+                    entry,
+                    WorkspaceListEntry::GroupHeader { group_idx, .. }
+                        if *group_idx == header.group_idx
+                )
+            })?;
+            Some((entry_idx, header.rect))
+        });
+    let last = match (last_card_entry, last_header_entry) {
+        (Some(card), Some(header)) => Some(if card.1.y >= header.1.y { card } else { header }),
+        (card, header) => card.or(header),
     };
-    let Some(last_entry_idx) = entry_position(last.ws_idx) else {
+    let Some((last_entry_idx, last_rect)) = last else {
         return slots;
     };
     let next_entry = entries.get(last_entry_idx.saturating_add(1));
-    if matches!(
-        next_entry,
-        Some(WorkspaceListEntry::Workspace { depth: 1.., .. })
-            | Some(WorkspaceListEntry::GroupHeader { .. })
-    ) {
-        return slots;
-    }
     let target = match next_entry {
-        Some(WorkspaceListEntry::Workspace { ws_idx, .. }) => {
-            crate::app::state::WorkspaceDropTarget::Before(*ws_idx)
+        Some(WorkspaceListEntry::Workspace { depth: 1.., .. }) => return slots,
+        Some(WorkspaceListEntry::Workspace { ws_idx, .. }) => WorkspaceDropTarget::Before(*ws_idx),
+        Some(WorkspaceListEntry::GroupHeader { group_idx, .. }) => {
+            match group_block_anchor(app, *group_idx) {
+                Some(anchor) => WorkspaceDropTarget::Before(anchor),
+                None => return slots,
+            }
         }
-        Some(WorkspaceListEntry::GroupHeader { .. }) | None => {
-            crate::app::state::WorkspaceDropTarget::End
-        }
+        None => WorkspaceDropTarget::End,
     };
-    let row = last.rect.y.saturating_add(last.rect.height);
+    let row = last_rect.y.saturating_add(last_rect.height);
     if row < list_bottom
         && slots
             .last()
@@ -1168,7 +1263,7 @@ pub(crate) fn workspace_drop_indicator_row(
     area: Rect,
     target: crate::app::state::WorkspaceDropTarget,
 ) -> Option<u16> {
-    workspace_drop_slots(app, cards, area)
+    workspace_drop_slots(app, cards, area, true)
         .into_iter()
         .find_map(|(candidate, row)| (candidate == target).then_some(row))
 }
@@ -1417,6 +1512,10 @@ fn render_workspace_list(
     };
     let insertion_row = match app.drag.as_ref().map(|drag| &drag.target) {
         Some(crate::app::state::DragTarget::WorkspaceReorder {
+            drop_target: Some(drop_target),
+            ..
+        })
+        | Some(crate::app::state::DragTarget::GroupReorder {
             drop_target: Some(drop_target),
             ..
         }) => workspace_drop_indicator_row(app, &app.view.workspace_card_areas, area, *drop_target),

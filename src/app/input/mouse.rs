@@ -6,8 +6,8 @@ use tracing::warn;
 use crate::{
     app::state::{
         AgentPanelSort, AppState, ContextMenuKind, ContextMenuState, DragState, DragTarget,
-        MenuListState, Mode, RightClickPassthroughGesture, TabPressState, ViewLayout,
-        WorkspacePressState,
+        GroupHeaderPressState, MenuListState, Mode, RightClickPassthroughGesture, TabPressState,
+        ViewLayout, WorkspacePressState,
     },
     layout::{PaneInfo, SplitBorder},
     selection::Selection,
@@ -45,6 +45,12 @@ pub(super) enum MouseAction {
     },
     MoveWorkspaceBlock {
         params: crate::api::schema::WorkspaceMoveBlockParams,
+    },
+    MoveWorkspaceGrouped {
+        assign_group_id: Option<String>,
+        unassign: bool,
+        workspace_ids: Vec<String>,
+        move_params: Option<crate::api::schema::WorkspaceMoveBlockParams>,
     },
     MoveTab {
         ws_idx: usize,
@@ -567,12 +573,15 @@ impl AppState {
                     }
 
                     if let Some(group_idx) = self.group_header_at_row(mouse.row) {
-                        if let Some(group) = self.groups.get(group_idx) {
-                            let group_id = group.id.clone();
-                            if !self.collapsed_group_ids.remove(&group_id) {
-                                self.collapsed_group_ids.insert(group_id);
-                            }
-                            self.mark_session_dirty();
+                        if self.groups.get(group_idx).is_some() {
+                            self.group_header_presses.insert(
+                                source_id,
+                                GroupHeaderPressState {
+                                    group_idx,
+                                    start_col: mouse.column,
+                                    start_row: mouse.row,
+                                },
+                            );
                             return None;
                         }
                     }
@@ -719,6 +728,24 @@ impl AppState {
                                 },
                             });
                         }
+                    } else if let Some(press) = self.group_header_presses.get(&source_id) {
+                        let delta_col = mouse.column.abs_diff(press.start_col);
+                        let delta_row = mouse.row.abs_diff(press.start_row);
+                        // A dragged group cannot nest, so resolve against
+                        // top-level slots only.
+                        let group_drop_target =
+                            self.workspace_drop_target_at_row_for(mouse.row, false);
+                        if group_drop_target.is_some()
+                            && delta_col.max(delta_row) >= WORKSPACE_DRAG_THRESHOLD
+                        {
+                            self.drag = Some(DragState {
+                                target: DragTarget::GroupReorder {
+                                    source_id,
+                                    source_group_idx: press.group_idx,
+                                    drop_target: group_drop_target,
+                                },
+                            });
+                        }
                     } else if let Some(press) = self.tab_presses.get(&source_id) {
                         let delta_col = mouse.column.abs_diff(press.start_col);
                         let delta_row = mouse.row.abs_diff(press.start_row);
@@ -752,6 +779,22 @@ impl AppState {
                     if *drag_source_id == source_id {
                         *drop_target = workspace_drop_target;
                     }
+                } else if matches!(
+                    &self.drag,
+                    Some(DragState {
+                        target: DragTarget::GroupReorder {
+                            source_id: drag_source_id,
+                            ..
+                        },
+                    }) if *drag_source_id == source_id
+                ) {
+                    let group_drop_target = self.workspace_drop_target_at_row_for(mouse.row, false);
+                    if let Some(DragState {
+                        target: DragTarget::GroupReorder { drop_target, .. },
+                    }) = &mut self.drag
+                    {
+                        *drop_target = group_drop_target;
+                    }
                 } else if let Some(DragState {
                     target:
                         DragTarget::TabReorder {
@@ -767,7 +810,9 @@ impl AppState {
                     }
                 } else if let Some(drag) = &self.drag {
                     match &drag.target {
-                        DragTarget::WorkspaceReorder { .. } | DragTarget::TabReorder { .. } => {}
+                        DragTarget::WorkspaceReorder { .. }
+                        | DragTarget::GroupReorder { .. }
+                        | DragTarget::TabReorder { .. } => {}
                         DragTarget::WorkspaceListScrollbar { grab_row_offset } => {
                             if let Some(offset_from_bottom) =
                                 self.workspace_list_offset_for_drag_row(mouse.row, *grab_row_offset)
@@ -876,9 +921,10 @@ impl AppState {
                 }
 
                 let workspace_press = self.workspace_presses.remove(&source_id);
+                let group_press = self.group_header_presses.remove(&source_id);
                 let tab_press = self.tab_presses.remove(&source_id);
                 if foreign_chrome_drag {
-                    return self.chrome_press_action(workspace_press, tab_press);
+                    return self.chrome_press_action(workspace_press, group_press, tab_press);
                 }
 
                 match self.drag.take() {
@@ -890,7 +936,24 @@ impl AppState {
                                 ..
                             },
                     }) => {
-                        if let Some(params) =
+                        let membership_changes = matches!(
+                            drop_target,
+                            crate::app::state::WorkspaceDropTarget::IntoGroup { .. }
+                        ) || self
+                            .workspaces
+                            .get(source_ws_idx)
+                            .is_some_and(|workspace| workspace.group_id.is_some());
+                        if membership_changes {
+                            if let Some(plan) = self.workspace_drop_plan(source_ws_idx, drop_target)
+                            {
+                                return Some(MouseAction::MoveWorkspaceGrouped {
+                                    assign_group_id: plan.assign_group_id,
+                                    unassign: plan.unassign,
+                                    workspace_ids: plan.workspace_ids,
+                                    move_params: plan.move_params,
+                                });
+                            }
+                        } else if let Some(params) =
                             self.workspace_move_block_params(source_ws_idx, drop_target)
                         {
                             if self
@@ -917,6 +980,20 @@ impl AppState {
                     }
                     Some(DragState {
                         target:
+                            DragTarget::GroupReorder {
+                                source_group_idx,
+                                drop_target: Some(drop_target),
+                                ..
+                            },
+                    }) => {
+                        if let Some(params) =
+                            self.group_move_block_params(source_group_idx, drop_target)
+                        {
+                            return Some(MouseAction::MoveWorkspaceBlock { params });
+                        }
+                    }
+                    Some(DragState {
+                        target:
                             DragTarget::TabReorder {
                                 ws_idx,
                                 source_tab_idx,
@@ -934,7 +1011,9 @@ impl AppState {
                         }
                     }
                     Some(_) => {}
-                    None => return self.chrome_press_action(workspace_press, tab_press),
+                    None => {
+                        return self.chrome_press_action(workspace_press, group_press, tab_press)
+                    }
                 }
             }
 
@@ -1496,7 +1575,9 @@ impl AppState {
     }
 
     fn chrome_press_pending(&self, source_id: crate::app::InputSourceId) -> bool {
-        self.tab_presses.contains_key(&source_id) || self.workspace_presses.contains_key(&source_id)
+        self.tab_presses.contains_key(&source_id)
+            || self.workspace_presses.contains_key(&source_id)
+            || self.group_header_presses.contains_key(&source_id)
     }
 
     fn chrome_drag_owned_by_other(&self, source_id: crate::app::InputSourceId) -> bool {
@@ -1504,6 +1585,9 @@ impl AppState {
             matches!(
                 drag.target,
                 DragTarget::WorkspaceReorder {
+                    source_id: drag_source_id,
+                    ..
+                } | DragTarget::GroupReorder {
                     source_id: drag_source_id,
                     ..
                 } | DragTarget::TabReorder {
@@ -1517,6 +1601,7 @@ impl AppState {
     fn chrome_press_action(
         &mut self,
         workspace_press: Option<WorkspacePressState>,
+        group_press: Option<GroupHeaderPressState>,
         tab_press: Option<TabPressState>,
     ) -> Option<MouseAction> {
         if let Some(press) = workspace_press {
@@ -1524,6 +1609,16 @@ impl AppState {
             return Some(MouseAction::FocusWorkspace {
                 ws_idx: press.ws_idx,
             });
+        }
+        if let Some(press) = group_press {
+            if let Some(group) = self.groups.get(press.group_idx) {
+                let group_id = group.id.clone();
+                if !self.collapsed_group_ids.remove(&group_id) {
+                    self.collapsed_group_ids.insert(group_id);
+                }
+                self.mark_session_dirty();
+            }
+            return None;
         }
         if let Some(press) = tab_press {
             if self.active == Some(press.ws_idx) {
@@ -1543,6 +1638,9 @@ impl AppState {
                 DragTarget::WorkspaceReorder {
                     source_id: drag_source_id,
                     ..
+                } | DragTarget::GroupReorder {
+                    source_id: drag_source_id,
+                    ..
                 } | DragTarget::TabReorder {
                     source_id: drag_source_id,
                     ..
@@ -1557,6 +1655,7 @@ impl AppState {
     fn clear_chrome_press(&mut self, source_id: crate::app::InputSourceId) {
         self.tab_presses.remove(&source_id);
         self.workspace_presses.remove(&source_id);
+        self.group_header_presses.remove(&source_id);
     }
 
     fn mouse_pane_focus_action(&self, pane_id: crate::layout::PaneId) -> Option<MouseAction> {
@@ -4819,5 +4918,173 @@ mod tests {
         };
 
         assert_eq!(wheel_routing(input_state), WheelRouting::HostScroll);
+    }
+}
+
+#[cfg(test)]
+mod group_drag_tests {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use ratatui::layout::Rect;
+
+    use super::super::{app_for_mouse_test, mouse};
+    use crate::workspace::Workspace;
+
+    fn app_with_group(names: &[&str], grouped: &[usize]) -> (crate::app::App, String) {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let group_id = app.state.create_group("Client", grouped).expect("group id");
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 40));
+        (app, group_id)
+    }
+
+    fn workspace_names(app: &crate::app::App) -> Vec<String> {
+        app.state
+            .workspaces
+            .iter()
+            .map(|ws| ws.custom_name.clone().unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn group_header_click_toggles_collapse() {
+        let (mut app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let header = app.state.view.group_header_areas[0];
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            header.rect.x + 2,
+            header.rect.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            header.rect.x + 2,
+            header.rect.y,
+        ));
+
+        assert!(app.state.collapsed_group_ids.contains(&group_id));
+        assert!(app.state.group_header_presses.is_empty());
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn dragging_group_header_reorders_whole_group() {
+        let (mut app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let header = app.state.view.group_header_areas[0];
+        let last_card = *app.state.view.workspace_card_areas.last().unwrap();
+        let end_row = last_card.rect.y + last_card.rect.height;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            header.rect.x + 2,
+            header.rect.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            header.rect.x + 2,
+            end_row,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            header.rect.x + 2,
+            end_row,
+        ));
+
+        assert_eq!(workspace_names(&app), vec!["c", "a", "b"]);
+        assert!(!app.state.collapsed_group_ids.contains(&group_id));
+        assert_eq!(
+            app.state.workspaces[1].group_id.as_deref(),
+            Some(group_id.as_str())
+        );
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn dragging_workspace_into_group_assigns_membership() {
+        let (mut app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let source_card = *app
+            .state
+            .view
+            .workspace_card_areas
+            .iter()
+            .find(|card| card.ws_idx == 2)
+            .unwrap();
+        let first_member_card = *app
+            .state
+            .view
+            .workspace_card_areas
+            .iter()
+            .find(|card| card.ws_idx == 0)
+            .unwrap();
+        let drop_row = first_member_card.rect.y.saturating_sub(1);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            source_card.rect.x + 2,
+            source_card.rect.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            source_card.rect.x + 2,
+            drop_row,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            source_card.rect.x + 2,
+            drop_row,
+        ));
+
+        let moved = app
+            .state
+            .workspaces
+            .iter()
+            .find(|ws| ws.custom_name.as_deref() == Some("c"))
+            .unwrap();
+        assert_eq!(moved.group_id.as_deref(), Some(group_id.as_str()));
+        assert_eq!(app.state.group_member_indices(&group_id).len(), 3);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn dragging_grouped_workspace_to_end_unassigns() {
+        let (mut app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        let source_card = *app
+            .state
+            .view
+            .workspace_card_areas
+            .iter()
+            .find(|card| card.ws_idx == 0)
+            .unwrap();
+        let last_card = *app.state.view.workspace_card_areas.last().unwrap();
+        let end_row = last_card.rect.y + last_card.rect.height;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            source_card.rect.x + 2,
+            source_card.rect.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            source_card.rect.x + 2,
+            end_row,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            source_card.rect.x + 2,
+            end_row,
+        ));
+
+        let moved = app
+            .state
+            .workspaces
+            .iter()
+            .find(|ws| ws.custom_name.as_deref() == Some("a"))
+            .unwrap();
+        assert_eq!(moved.group_id, None);
+        assert_eq!(app.state.group_member_indices(&group_id).len(), 1);
+        assert_eq!(workspace_names(&app).last().map(String::as_str), Some("a"));
+        app.state.assert_invariants_for_test();
     }
 }

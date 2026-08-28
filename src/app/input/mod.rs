@@ -433,6 +433,30 @@ impl App {
                     MouseAction::MoveWorkspaceBlock { params } => {
                         self.move_workspace_block_via_api(params)
                     }
+                    MouseAction::MoveWorkspaceGrouped {
+                        assign_group_id,
+                        unassign,
+                        workspace_ids,
+                        move_params,
+                    } => {
+                        if let Some(group_id) = assign_group_id {
+                            self.runtime_group_assign(
+                                "tui.group.assign",
+                                crate::api::schema::GroupAssignParams {
+                                    group_id,
+                                    workspace_ids: workspace_ids.clone(),
+                                },
+                            );
+                        } else if unassign {
+                            self.runtime_group_unassign(
+                                "tui.group.unassign",
+                                crate::api::schema::GroupUnassignParams { workspace_ids },
+                            );
+                        }
+                        if let Some(params) = move_params {
+                            self.move_workspace_block_via_api(params);
+                        }
+                    }
                     MouseAction::MoveTab {
                         ws_idx,
                         source_tab_idx,
