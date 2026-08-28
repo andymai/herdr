@@ -638,7 +638,8 @@ fn confirm_close_overlay_text(
         let pane_count: usize = member_indices
             .iter()
             .filter_map(|idx| app.workspaces.get(*idx))
-            .map(|ws| ws.layout.pane_count())
+            .flat_map(|ws| ws.tabs.iter())
+            .map(|tab| tab.layout.pane_count())
             .sum();
         let workspace_text = if member_indices.len() == 1 {
             "1 workspace, ".to_string()
@@ -942,6 +943,26 @@ mod tests {
         app::{state::WorktreeCreateState, AppState, Mode},
         workspace::Workspace,
     };
+
+    #[test]
+    fn group_confirm_close_counts_panes_across_all_tabs() {
+        let mut state = AppState::test_new();
+        state.workspaces = vec![Workspace::test_new("a"), Workspace::test_new("b")];
+        state.workspaces[0].test_add_tab(None);
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        state.selected = 0;
+        let group_id = state.create_group("Client", &[0, 1]).expect("group id");
+        state.confirm_close_group_id = Some(group_id);
+
+        let (title, detail) = super::confirm_close_overlay_text(
+            &state,
+            &crate::terminal::TerminalRuntimeRegistry::new(),
+        );
+
+        assert_eq!(title, "Close group?");
+        assert_eq!(detail, "Client — 2 workspaces, 3 panes");
+    }
     use ratatui::{
         backend::TestBackend,
         buffer::Buffer,
