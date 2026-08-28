@@ -1,0 +1,39 @@
+src/platform/windows/clipboard_image.rs
+  s_bf96a17ac884a7::t_478b04c011ea40 191-193,195,202-204,206,218-220,222
+  s_bf96a17ac884a7::t_ad8f7f85928d66 224
+.github/workflows/ci.yml
+  s_bf96a17ac884a7::t_c9d20671d50efa 15
+src/terminal_theme.rs
+  s_bf96a17ac884a7::t_c566a765df89e2 138,142-143
+src/server/handoff.rs
+  s_bf96a17ac884a7::t_9ed532472fc9ed 388
+src/app/api/pane_graphics.rs
+  s_bf96a17ac884a7::t_964e2f03ae8aee 502
+src/ghostty/mod.rs
+  s_bf96a17ac884a7::t_d4188eaca21e07 714
+  s_bf96a17ac884a7::t_c41fae4eadb28f 728
+.github/workflows/release.yml
+  s_bf96a17ac884a7::t_c9d20671d50efa 13
+.github/workflows/preview.yml
+  s_bf96a17ac884a7::t_c9d20671d50efa 16
+rust-toolchain.toml
+  s_bf96a17ac884a7::t_097d9dfbd50d9b 2
+.github/workflows/build-artifacts-manual.yml
+  s_bf96a17ac884a7::t_c9d20671d50efa 41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "97e243ad8c57187ba9e5d4b7e3d1620cf1a810e6",
+  "prompts": {},
+  "sessions": {
+    "s_bf96a17ac884a7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "29fdbdbb-f7ef-45cc-ab58-8ed1703e9519",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
