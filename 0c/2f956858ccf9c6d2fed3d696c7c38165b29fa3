@@ -1,0 +1,27 @@
+README.md
+  s_451128975bd008::t_16115b5c73e225 83
+  s_451128975bd008::t_4dd1c89b674b9c 3
+  s_451128975bd008::t_5b4e4433f225ea 75,84
+  s_451128975bd008::t_cb6ee3b76edc2e 85
+  s_451128975bd008::t_d8499003e8d12b 86
+.gitignore
+  s_451128975bd008::t_15703f06f2ac95 2
+Cargo.toml
+  s_451128975bd008::t_5041642566780c 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "0c2f956858ccf9c6d2fed3d696c7c38165b29fa3",
+  "prompts": {},
+  "sessions": {
+    "s_451128975bd008": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1c34ee01-f3ec-4a65-a6d7-968baf53aaf2",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
