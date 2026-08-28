@@ -18,8 +18,8 @@ use crate::{
 use super::WheelRouting;
 use super::{
     modal::{
-        apply_global_menu_action, confirm_close_cancel, global_menu_actions, leave_modal,
-        modal_action_from_buttons, open_global_menu, open_new_tab_dialog, ModalAction,
+        apply_global_menu_action, cancel_group_modal, confirm_close_cancel, global_menu_actions,
+        leave_modal, modal_action_from_buttons, open_global_menu, open_new_tab_dialog, ModalAction,
     },
     settings::SettingsAction,
     ScrollbarClickTarget, TAB_DRAG_THRESHOLD, WORKSPACE_DRAG_THRESHOLD,
@@ -62,6 +62,7 @@ pub(super) enum MouseAction {
         ratio: f32,
     },
     RenameModal(ModalAction),
+    GroupPickerConfirm,
     ConfirmCloseAccept,
     ContextMenu {
         menu: ContextMenuState,
@@ -219,9 +220,30 @@ impl AppState {
             }
         }
 
+        if self.mode == Mode::GroupPicker {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(picker) = &mut self.group_picker {
+                        picker.select_previous();
+                    }
+                    return None;
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(picker) = &mut self.group_picker {
+                        picker.select_next();
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         if matches!(
             self.mode,
-            Mode::NewLinkedWorktree | Mode::OpenExistingWorktree | Mode::ConfirmRemoveWorktree
+            Mode::NewLinkedWorktree
+                | Mode::OpenExistingWorktree
+                | Mode::ConfirmRemoveWorktree
+                | Mode::GroupPicker
         ) && !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
         {
             return None;
@@ -395,9 +417,28 @@ impl AppState {
                     return None;
                 }
 
+                if self.mode == Mode::GroupPicker {
+                    let clicked_row = self.group_picker.as_ref().and_then(|picker| {
+                        let inner = crate::ui::group_picker_inner_rect(self.screen_rect(), picker)?;
+                        crate::ui::group_picker_row_at(picker, inner, mouse.column, mouse.row)
+                    });
+                    match clicked_row {
+                        Some(row_idx) => {
+                            if let Some(picker) = self.group_picker.as_mut() {
+                                picker.selected = row_idx;
+                            }
+                            return Some(MouseAction::GroupPickerConfirm);
+                        }
+                        None => {
+                            cancel_group_modal(self);
+                            return None;
+                        }
+                    }
+                }
+
                 if matches!(
                     self.mode,
-                    Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane
+                    Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane | Mode::GroupName
                 ) {
                     let action = self
                         .rename_modal_inner()
@@ -5045,6 +5086,41 @@ mod group_drag_tests {
         assert_eq!(moved.group_id.as_deref(), Some(group_id.as_str()));
         assert_eq!(app.state.group_member_indices(&group_id).len(), 3);
         app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn clicking_group_picker_row_assigns_membership() {
+        let (mut app, group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        crate::app::input::modal::open_group_picker(&mut app.state, 2);
+        let picker = app.state.group_picker.as_ref().expect("picker");
+        let inner =
+            crate::ui::group_picker_inner_rect(app.state.screen_rect(), picker).expect("inner");
+        let row_y = inner.y + 2;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 2,
+            row_y,
+        ));
+
+        assert_eq!(
+            app.state.workspaces[2].group_id.as_deref(),
+            Some(group_id.as_str())
+        );
+        assert_eq!(app.state.group_picker, None);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn clicking_outside_group_picker_cancels() {
+        let (mut app, _group_id) = app_with_group(&["a", "b", "c"], &[0, 1]);
+        crate::app::input::modal::open_group_picker(&mut app.state, 2);
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 1, 1));
+
+        assert_eq!(app.state.group_picker, None);
+        assert_ne!(app.state.mode, crate::app::Mode::GroupPicker);
+        assert_eq!(app.state.workspaces[2].group_id, None);
     }
 
     #[test]

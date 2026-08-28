@@ -634,14 +634,25 @@ fn confirm_close_overlay_text(
         .as_deref()
         .and_then(|group_id| app.groups.iter().find(|group| group.id == group_id))
     {
-        let member_count = app.group_member_indices(&group.id).len();
+        let member_indices = app.group_member_indices(&group.id);
+        let pane_count: usize = member_indices
+            .iter()
+            .filter_map(|idx| app.workspaces.get(*idx))
+            .map(|ws| ws.layout.pane_count())
+            .sum();
+        let workspace_text = if member_indices.len() == 1 {
+            "1 workspace, ".to_string()
+        } else {
+            format!("{} workspaces, ", member_indices.len())
+        };
+        let pane_text = if pane_count == 1 {
+            "1 pane".to_string()
+        } else {
+            format!("{pane_count} panes")
+        };
         return (
-            "close all workspaces in group?".to_string(),
-            format!(
-                "{} — closes {member_count} workspace{}",
-                group.name,
-                if member_count == 1 { "" } else { "s" }
-            ),
+            "Close group?".to_string(),
+            format!("{} — {workspace_text}{pane_text}", group.name),
         );
     }
     let ws_name = app
@@ -807,17 +818,59 @@ pub(crate) fn confirm_close_button_rects(inner: Rect) -> (Rect, Rect) {
     (rects[0], rects[1])
 }
 
+fn group_picker_visible_rows(picker: &crate::app::state::GroupPickerState) -> u16 {
+    picker.row_count().min(8) as u16
+}
+
+pub(crate) fn group_picker_inner_rect(
+    area: Rect,
+    picker: &crate::app::state::GroupPickerState,
+) -> Option<Rect> {
+    centered_popup_rect(area, 56, group_picker_visible_rows(picker) + 6).map(|popup| {
+        Rect::new(
+            popup.x + 1,
+            popup.y + 1,
+            popup.width.saturating_sub(2),
+            popup.height.saturating_sub(2),
+        )
+    })
+}
+
+fn group_picker_first_visible(picker: &crate::app::state::GroupPickerState) -> usize {
+    picker.selected.saturating_sub(usize::from(
+        group_picker_visible_rows(picker).saturating_sub(1),
+    ))
+}
+
+pub(crate) fn group_picker_row_at(
+    picker: &crate::app::state::GroupPickerState,
+    inner: Rect,
+    col: u16,
+    row: u16,
+) -> Option<usize> {
+    if col < inner.x || col >= inner.x.saturating_add(inner.width) {
+        return None;
+    }
+    let list_top = inner.y.saturating_add(2);
+    let list_height = group_picker_visible_rows(picker).min(inner.height.saturating_sub(3));
+    if row < list_top || row >= list_top.saturating_add(list_height) {
+        return None;
+    }
+    let idx = group_picker_first_visible(picker) + usize::from(row - list_top);
+    (idx < picker.row_count()).then_some(idx)
+}
+
 pub(super) fn render_group_picker_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     super::dim_background(frame, area);
     let Some(picker) = app.group_picker.as_ref() else {
         return;
     };
 
-    let visible_rows = picker.row_count().min(8) as u16;
-    let Some(inner) = render_modal_shell(frame, area, 56, visible_rows + 4, &app.palette) else {
+    let visible_rows = group_picker_visible_rows(picker);
+    let Some(inner) = render_modal_shell(frame, area, 56, visible_rows + 6, &app.palette) else {
         return;
     };
-    if inner.height < 3 {
+    if inner.height < 4 {
         return;
     }
 
@@ -829,10 +882,12 @@ pub(super) fn render_group_picker_overlay(app: &AppState, frame: &mut Frame, are
     );
 
     let list_top = inner.y + 2;
-    let list_bottom = inner.y + inner.height;
-    let first_visible = picker
-        .selected
-        .saturating_sub(usize::from(visible_rows.saturating_sub(1)));
+    let list_bottom = inner
+        .y
+        .saturating_add(inner.height)
+        .saturating_sub(1)
+        .max(list_top);
+    let first_visible = group_picker_first_visible(picker);
     for (row_offset, row) in (first_visible..picker.row_count()).enumerate() {
         let y = list_top + row_offset as u16;
         if y >= list_bottom {
@@ -868,6 +923,17 @@ pub(super) fn render_group_picker_overlay(app: &AppState, frame: &mut Frame, are
             Rect::new(inner.x + 1, y, inner.width.saturating_sub(2), 1),
         );
     }
+
+    let hint_y = inner.y + inner.height.saturating_sub(1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " ↵ move    esc cancel",
+            Style::default()
+                .fg(app.palette.overlay0)
+                .add_modifier(Modifier::DIM),
+        ))),
+        Rect::new(inner.x, hint_y, inner.width, 1),
+    );
 }
 
 #[cfg(test)]
