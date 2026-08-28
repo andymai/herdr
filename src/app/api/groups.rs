@@ -97,6 +97,42 @@ impl App {
         });
     }
 
+    /// Distinct group ids the listed workspaces belong to before a membership
+    /// mutation, excluding the destination group. Space mates share membership,
+    /// so the raw indices cover every group the expanded mutation touches.
+    fn previous_group_ids(&self, member_indices: &[usize], exclude: Option<&str>) -> Vec<String> {
+        let mut group_ids = Vec::new();
+        for idx in member_indices {
+            let Some(group_id) = self
+                .state
+                .workspaces
+                .get(*idx)
+                .and_then(|ws| ws.group_id.clone())
+            else {
+                continue;
+            };
+            if exclude != Some(group_id.as_str()) && !group_ids.contains(&group_id) {
+                group_ids.push(group_id);
+            }
+        }
+        group_ids
+    }
+
+    /// After members leave their previous groups, tell event-driven clients
+    /// what happened to each source group: updated when it still has members,
+    /// removed when it dissolved.
+    fn emit_source_group_events(&mut self, previous_group_ids: Vec<String>) {
+        for group_id in previous_group_ids {
+            match self.state.group_index_by_id(&group_id) {
+                Some(group_idx) => self.emit_group_updated(group_idx),
+                None => self.emit_event(EventEnvelope {
+                    event: EventKind::GroupRemoved,
+                    data: EventData::GroupRemoved { group_id },
+                }),
+            }
+        }
+    }
+
     pub(super) fn handle_group_list(&mut self, id: String) -> String {
         let groups = (0..self.state.groups.len())
             .map(|idx| self.group_info(idx))
@@ -122,6 +158,7 @@ impl App {
             Ok(indices) => indices,
             Err(response) => return response,
         };
+        let previous_group_ids = self.previous_group_ids(&member_indices, None);
         let Some(group_id) = self.state.create_group(&params.name, &member_indices) else {
             return encode_error(
                 id,
@@ -137,6 +174,7 @@ impl App {
         for ws_idx in self.state.group_member_indices(&group_id) {
             self.emit_workspace_updated(ws_idx);
         }
+        self.emit_source_group_events(previous_group_ids);
         self.emit_event(EventEnvelope {
             event: EventKind::GroupCreated,
             data: EventData::GroupCreated {
@@ -177,6 +215,7 @@ impl App {
             Ok(indices) => indices,
             Err(response) => return response,
         };
+        let previous_group_ids = self.previous_group_ids(&member_indices, Some(group_id.as_str()));
         if self
             .state
             .assign_workspaces_to_group(&group_id, &member_indices)
@@ -185,6 +224,7 @@ impl App {
             for ws_idx in self.state.group_member_indices(&group_id) {
                 self.emit_workspace_updated(ws_idx);
             }
+            self.emit_source_group_events(previous_group_ids);
             if let Some(group_idx) = self.state.group_index_by_id(&group_id) {
                 self.emit_group_updated(group_idx);
             }
@@ -209,25 +249,13 @@ impl App {
             Ok(indices) => indices,
             Err(response) => return response,
         };
-        let previous_groups: Vec<String> = member_indices
-            .iter()
-            .filter_map(|idx| self.state.workspaces.get(*idx))
-            .filter_map(|ws| ws.group_id.clone())
-            .collect();
+        let previous_group_ids = self.previous_group_ids(&member_indices, None);
         if self.state.unassign_workspaces(&member_indices) {
             self.schedule_session_save();
             for ws_idx in member_indices {
                 self.emit_workspace_updated(ws_idx);
             }
-            for group_id in previous_groups {
-                match self.state.group_index_by_id(&group_id) {
-                    Some(group_idx) => self.emit_group_updated(group_idx),
-                    None => self.emit_event(EventEnvelope {
-                        event: EventKind::GroupRemoved,
-                        data: EventData::GroupRemoved { group_id },
-                    }),
-                }
-            }
+            self.emit_source_group_events(previous_group_ids);
         }
         encode_success(id, ResponseResult::Ok {})
     }
@@ -504,6 +532,88 @@ mod tests {
         );
         assert!(app.state.groups.is_empty());
         app.state.assert_invariants_for_test();
+    }
+
+    fn app_with_event_hub(names: &[&str]) -> (App, crate::api::EventHub) {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let event_hub = crate::api::EventHub::default();
+        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        app.state.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+        app.state.ensure_test_terminals();
+        (app, event_hub)
+    }
+
+    fn group_event_names_for(
+        event_hub: &crate::api::EventHub,
+        after: u64,
+        group_id: &str,
+    ) -> Vec<&'static str> {
+        event_hub
+            .events_after(after)
+            .into_iter()
+            .filter_map(|(_, envelope)| match envelope.data {
+                crate::api::schema::EventData::GroupUpdated { group } => {
+                    (group.group_id == group_id).then_some("group.updated")
+                }
+                crate::api::schema::EventData::GroupRemoved { group_id: removed } => {
+                    (removed == group_id).then_some("group.removed")
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn api_group_assign_emits_events_for_dissolved_source_group() {
+        let (mut app, event_hub) = app_with_event_hub(&["a", "b"]);
+        let first = app.public_workspace_id(0);
+        let second = app.public_workspace_id(1);
+        let source = create_group(&mut app, "Source", vec![first.clone()]);
+        let destination = create_group(&mut app, "Destination", vec![second]);
+
+        let sequence = event_hub.current_sequence();
+        let response = app.handle_group_assign(
+            "req".into(),
+            GroupAssignParams {
+                group_id: destination,
+                workspace_ids: vec![first],
+            },
+        );
+        let _: SuccessResponse = serde_json::from_str(&response).expect("success");
+
+        assert_eq!(
+            group_event_names_for(&event_hub, sequence, &source),
+            vec!["group.removed"],
+            "dissolving the source group must reach event subscribers"
+        );
+    }
+
+    #[test]
+    fn api_group_create_emits_events_for_shrunken_source_group() {
+        let (mut app, event_hub) = app_with_event_hub(&["a", "b"]);
+        let first = app.public_workspace_id(0);
+        let second = app.public_workspace_id(1);
+        let source = create_group(&mut app, "Source", vec![first.clone(), second]);
+
+        let sequence = event_hub.current_sequence();
+        let response = app.handle_group_create(
+            "req".into(),
+            GroupCreateParams {
+                name: "Split".into(),
+                workspace_ids: vec![first],
+            },
+        );
+        let _: SuccessResponse = serde_json::from_str(&response).expect("success");
+
+        assert_eq!(
+            group_event_names_for(&event_hub, sequence, &source),
+            vec!["group.updated"],
+            "the shrunken source group must reach event subscribers"
+        );
+        assert_eq!(app.state.groups.len(), 2);
     }
 
     #[test]
