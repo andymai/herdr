@@ -10,7 +10,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  RUST_TOOLCHAIN_VERSION: 1.96.1
+  RUST_TOOLCHAIN_VERSION: 1.98.0
 
 jobs:
   flake-check:

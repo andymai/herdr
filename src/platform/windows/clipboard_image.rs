@@ -188,18 +188,22 @@ impl<'a> Dib<'a> {
         match self.format {
             PixelFormat::Bgr24 => {
                 for (pixel, rgba) in source
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .take(usize::try_from(self.width).ok()?)
-                    .zip(output.chunks_exact_mut(4))
+                    .zip(output.as_chunks_mut::<4>().0)
                 {
                     rgba.copy_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
                 }
             }
             PixelFormat::Bgrx32 => {
                 for (pixel, rgba) in source
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .take(usize::try_from(self.width).ok()?)
-                    .zip(output.chunks_exact_mut(4))
+                    .zip(output.as_chunks_mut::<4>().0)
                 {
                     rgba.copy_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
                 }
@@ -211,11 +215,13 @@ impl<'a> Dib<'a> {
                 alpha,
             } => {
                 for (pixel, rgba) in source
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .take(usize::try_from(self.width).ok()?)
-                    .zip(output.chunks_exact_mut(4))
+                    .zip(output.as_chunks_mut::<4>().0)
                 {
-                    let pixel = u32::from_le_bytes(pixel.try_into().ok()?);
+                    let pixel = u32::from_le_bytes(*pixel);
                     rgba.copy_from_slice(&[
                         red.extract(pixel),
                         green.extract(pixel),
