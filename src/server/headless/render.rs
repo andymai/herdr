@@ -339,6 +339,8 @@ impl HeadlessServer {
                 }
             }
         }
+        #[cfg(unix)]
+        self.app.sync_core_pane_visibility(&pane_ids);
         self.app.render_dirty.set_immediate_pty_sources(pane_ids);
     }
 
