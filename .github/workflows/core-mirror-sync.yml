@@ -1,0 +1,141 @@
+# Keeps feat/core-backed-panes on the latest upstream release and publishes a
+# Linux build of it as a core-mirror-* release, which `herdr update` in that
+# build installs. Tags never start with `v` or `preview-`, so upstream's
+# release workflows stay idle in this fork.
+name: core-mirror sync
+
+on:
+  schedule:
+    - cron: "23 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: core-mirror-sync
+  cancel-in-progress: false
+
+env:
+  BRANCH: feat/core-backed-panes
+  ASSET: herdr-linux-x86_64
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out the mirror branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+
+      - name: Rebase onto the latest upstream release
+        id: plan
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/herdrdev/herdr.git
+          git fetch --quiet --tags upstream
+          latest=$(git tag --list 'v[0-9]*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+          base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD)
+          before=$(git rev-parse HEAD)
+          echo "upstream release $latest, branch based on $base"
+
+          # The generated API schema conflicts on most releases: take
+          # upstream's copy and regenerate it below. Anything else needs a person.
+          if [ "$base" != "$latest" ] && ! git rebase --onto "$latest" "$base"; then
+            for _ in $(seq 1 100); do
+              [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] || break
+              git diff --name-only --diff-filter=U | while IFS= read -r file; do
+                if [ "$file" = docs/next/api/herdr-api.schema.json ]; then
+                  git checkout --ours -- "$file"
+                  git add -- "$file"
+                else
+                  printf 'rebase onto %s conflicts in: %s\n' "$latest" "$file"
+                  exit 1
+                fi
+              done || { git rebase --abort; exit 1; }
+              if git diff --cached --quiet; then
+                git rebase --skip || true
+              else
+                GIT_EDITOR=true git rebase --continue || true
+              fi
+            done
+            if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+              echo "the rebase did not finish"
+              git rebase --abort
+              exit 1
+            fi
+          fi
+
+          zig=$(sed -n 's/.*minimum_zig_version = "\([0-9.]*\)".*/\1/p' vendor/libghostty-vt/build.zig.zon)
+          echo "$zig" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          {
+            echo "latest=$latest"
+            echo "before=$before"
+            echo "zig=$zig"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Zig
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: ${{ steps.plan.outputs.zig }}
+
+      - name: Install Rust tools
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Regenerate the API schema
+        run: |
+          set -euo pipefail
+          HERDR_UPDATE_API_SCHEMA=1 cargo nextest run --locked -E 'test(generated_protocol_schema_artifact_is_current)'
+          if ! git diff --quiet -- docs/next/api/herdr-api.schema.json; then
+            git add docs/next/api/herdr-api.schema.json
+            git commit -m "chore: regenerate the API schema"
+          fi
+
+      - name: Check
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo nextest run --locked --no-fail-fast --retries 2
+          python3 scripts/config_reference_check.py
+
+      - name: Push the branch
+        env:
+          BEFORE: ${{ steps.plan.outputs.before }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$BEFORE" ]; then
+            git push --force-with-lease="$BRANCH:$BEFORE" origin "HEAD:$BRANCH"
+          fi
+
+      - name: Publish a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.plan.outputs.latest }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          tag="core-mirror-$LATEST-${head:0:8}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already published"
+            exit 0
+          fi
+          cargo build --release --locked --bin herdr
+          cp target/release/herdr "$ASSET"
+          sha256sum "$ASSET" > "$ASSET.sha256"
+          gh release create "$tag" "$ASSET" "$ASSET.sha256" \
+            --target "$head" \
+            --title "herdr $LATEST with the herdr-core mirror" \
+            --notes "Upstream $LATEST plus the herdr-core mirror from \`$BRANCH\` at ${head:0:8}. A build of this fork installs it with \`herdr update\`."
