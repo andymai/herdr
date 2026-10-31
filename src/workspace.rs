@@ -16,9 +16,13 @@ use crate::render_signal::RenderSignal;
 use crate::terminal::{TerminalId, TerminalRuntime, TerminalRuntimeRegistry, TerminalState};
 
 mod aggregate;
+#[cfg(unix)]
+mod core_attach;
 mod git;
 mod tab;
 
+#[cfg(unix)]
+pub(crate) use self::core_attach::CorePaneHost;
 use self::git::git_status_cache_key_for_space;
 pub(crate) use self::{git::git_status_snapshot_for_cwd_with_demand, tab::MovedPane};
 pub use self::{

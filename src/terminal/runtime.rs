@@ -219,6 +219,45 @@ impl TerminalRuntime {
         .map(Self)
     }
 
+    #[cfg(unix)]
+    pub fn core_terminal(&self) -> Option<&str> {
+        self.0.core_terminal()
+    }
+
+    #[cfg(unix)]
+    pub fn set_core_visible(&self, visible: bool) {
+        self.0.set_core_visible(visible);
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_core(
+        pane_id: PaneId,
+        rows: u16,
+        cols: u16,
+        core_terminal: &str,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<(Self, Option<std::path::PathBuf>)> {
+        crate::pane::PaneRuntime::attach_core(
+            pane_id,
+            rows,
+            cols,
+            core_terminal,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            events,
+            render_notify,
+            render_dirty,
+        )
+        .map(|(runtime, cwd)| (Self(runtime), cwd))
+    }
+
     pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
         self.0.apply_host_terminal_theme(theme);
     }

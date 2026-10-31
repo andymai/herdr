@@ -1077,6 +1077,9 @@ impl Default for RemoteConfig {
 pub struct ExperimentalConfig {
     /// Allow launching herdr inside an existing herdr pane. Default: false.
     pub allow_nested: bool,
+    /// Show the Herdr app's spaces, tabs and splits from herdr-core, with
+    /// panes attached to the app's terminals. Unix only. Default: false.
+    pub core_mirror: bool,
     /// Deprecated compatibility key for `terminal.kitty_graphics`.
     pub kitty_graphics: Option<bool>,
     /// Persist pane screen history to session-history.json. Default: false.

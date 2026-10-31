@@ -1396,6 +1396,8 @@ impl AppState {
                 Vec::new()
             }
             AppEvent::WorktreeRuntimeRestoreFailed { .. } => Vec::new(),
+            #[cfg(unix)]
+            AppEvent::CoreLayout(_) | AppEvent::CoreStatus(_) => Vec::new(),
             AppEvent::UpdateReady {
                 version,
                 install_command,
