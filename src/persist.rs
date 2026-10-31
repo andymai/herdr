@@ -4,6 +4,8 @@
 //! Optional pane screen history is stored separately at `session-history.json`.
 //! Installed plugins are persisted separately at `plugins.json`.
 
+#[cfg(unix)]
+mod core_attach;
 mod io;
 pub mod plugin_registry;
 mod restore;

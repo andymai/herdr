@@ -270,7 +270,8 @@ pub fn capture(
     active: Option<usize>,
     selected: usize,
 ) -> SessionSnapshot {
-    SessionSnapshot {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut snapshot = SessionSnapshot {
         version: SNAPSHOT_VERSION,
         workspaces: workspaces
             .iter()
@@ -281,7 +282,10 @@ pub fn capture(
         sidebar_width: None,
         sidebar_section_split: None,
         collapsed_space_keys: std::collections::HashSet::new(),
-    }
+    };
+    #[cfg(unix)]
+    super::core_attach::prune_core_panes(&mut snapshot, workspaces, terminal_runtimes);
+    snapshot
 }
 
 fn capture_workspace(
