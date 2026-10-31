@@ -2,6 +2,8 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
+#[cfg(unix)]
+mod core_mirror;
 mod env;
 mod integrations;
 mod layouts;
@@ -104,6 +106,23 @@ impl App {
                     pane_id,
                     exit_reason: crate::platform::ChildExitReason::Exited,
                 }
+            }
+            #[cfg(unix)]
+            AppEvent::CoreLayout(layout) => {
+                self.reconcile_core_layout(layout);
+                return Vec::new();
+            }
+            #[cfg(unix)]
+            AppEvent::CoreStatus(status) => return self.apply_core_status(status),
+            #[cfg(unix)]
+            AppEvent::CoreCwd(cwd) => {
+                self.apply_core_cwd(cwd);
+                return Vec::new();
+            }
+            #[cfg(unix)]
+            AppEvent::CoreTokens(tokens) => {
+                self.apply_core_tokens(tokens);
+                return Vec::new();
             }
             ev => ev,
         };
@@ -934,6 +953,11 @@ impl App {
         request: crate::api::schema::Request,
     ) -> String {
         self.sync_pending_terminal_titles();
+        #[cfg(unix)]
+        let request = match self.route_core_mirror_request(request) {
+            Ok(response) => return response,
+            Err(request) => *request,
+        };
         use crate::api::schema::{
             ErrorBody, ErrorResponse, Method, ResponseResult, SuccessResponse,
         };

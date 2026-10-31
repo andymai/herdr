@@ -76,6 +76,18 @@ pub(crate) struct WorktreeReadData {
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
+    /// The Herdr app's spaces, tabs and splits, read from herdr-core.
+    #[cfg(unix)]
+    CoreLayout(crate::core_mirror::CoreLayout),
+    /// A herdr-core terminal's latest status report.
+    #[cfg(unix)]
+    CoreStatus(crate::core_mirror::CoreStatus),
+    /// The folder a herdr-core terminal's foreground program runs in.
+    #[cfg(unix)]
+    CoreCwd(crate::core_mirror::CoreCwd),
+    /// Display tokens set as labels on a herdr-core terminal.
+    #[cfg(unix)]
+    CoreTokens(crate::core_mirror::CoreTokens),
     /// A pane's child process exited.
     PaneDied {
         pane_id: PaneId,

@@ -107,6 +107,8 @@ pub struct App {
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
+    #[cfg(unix)]
+    pub(crate) core_mirror: crate::core_mirror::CoreMirrorState,
     pub(crate) event_rx: mpsc::Receiver<AppEvent>,
     pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
     pub(crate) event_hub: crate::api::EventHub,
@@ -604,6 +606,12 @@ impl App {
                 tracing::warn!(err = %err, "failed to spawn agent manifest check thread");
             }
         }
+        #[cfg(unix)]
+        if config.experimental.core_mirror {
+            if let Err(err) = crate::core_mirror::spawn(event_tx.clone()) {
+                tracing::warn!(err = %err, "failed to start the herdr-core mirror");
+            }
+        }
 
         let last_focus = state.active.and_then(|idx| {
             state
@@ -625,6 +633,8 @@ impl App {
             pixel_mouse_available: false,
             terminal_runtimes: restored_terminal_runtimes,
             event_tx,
+            #[cfg(unix)]
+            core_mirror: crate::core_mirror::CoreMirrorState::new(config.experimental.core_mirror),
             event_rx,
             last_git_remote_status_refresh: Instant::now() - GIT_REMOTE_STATUS_REFRESH_INTERVAL,
             last_git_repo_discovery_refresh: Instant::now(),

@@ -1491,6 +1491,12 @@
           "description": "Allow launching herdr inside an existing herdr pane."
         },
         {
+          "key": "experimental.core_mirror",
+          "type": "boolean",
+          "default": "false",
+          "description": "Show the Herdr app's spaces, tabs and splits from herdr-core, with panes attached to the app's terminals. Unix only."
+        },
+        {
           "key": "experimental.kitty_graphics",
           "type": "boolean",
           "default": "unset",
