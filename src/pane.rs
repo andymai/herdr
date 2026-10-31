@@ -26,6 +26,8 @@ use crate::render_signal::RenderSignal;
 
 mod agent_detection;
 mod background_agent;
+#[cfg(unix)]
+mod core_attach;
 mod cursor;
 mod input;
 mod kitty_keyboard;
@@ -1523,6 +1525,8 @@ pub struct PaneRuntime {
 
 enum PaneRuntimeIo {
     Actor(PtyIoActorHandle),
+    #[cfg(unix)]
+    Core(crate::core_attach::CoreAttachHandle),
     #[cfg(test)]
     TestChannel {
         sender: mpsc::Sender<Bytes>,
@@ -1534,6 +1538,8 @@ impl PaneRuntimeIo {
     fn shutdown(&self) {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.shutdown(),
+            #[cfg(unix)]
+            PaneRuntimeIo::Core(core) => core.shutdown(),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => {}
         }
@@ -1543,6 +1549,9 @@ impl PaneRuntimeIo {
     fn duplicate_handoff_fd(&self) -> std::io::Result<std::os::fd::RawFd> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.duplicate_for_handoff(),
+            PaneRuntimeIo::Core(_) => Err(std::io::Error::other(
+                "a herdr-core pane has no PTY master fd",
+            )),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => {
                 Err(std::io::Error::other("test runtime has no PTY master fd"))
@@ -1554,6 +1563,7 @@ impl PaneRuntimeIo {
     fn foreground_process_group_id(&self) -> Option<u32> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.foreground_process_group_id(),
+            PaneRuntimeIo::Core(_) => None,
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => None,
         }
@@ -1563,6 +1573,7 @@ impl PaneRuntimeIo {
     fn begin_handoff(&self, timeout: std::time::Duration) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.begin_handoff(timeout),
+            PaneRuntimeIo::Core(_) => Ok(()),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => Ok(()),
         }
@@ -1578,6 +1589,7 @@ impl PaneRuntimeIo {
                     actor.rollback_handoff()
                 }
             }
+            PaneRuntimeIo::Core(_) => Ok(()),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => Ok(()),
         }
@@ -1587,6 +1599,7 @@ impl PaneRuntimeIo {
     fn release_after_commit(&self) -> std::io::Result<()> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.release_after_commit(),
+            PaneRuntimeIo::Core(_) => Ok(()),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => Ok(()),
         }
@@ -1610,6 +1623,13 @@ impl PaneRuntimeIo {
                     terminal_responses,
                 );
             }
+            #[cfg(unix)]
+            PaneRuntimeIo::Core(core) => {
+                core.resize(rows, cols);
+                for response in terminal_responses {
+                    core.write_terminal_response(response);
+                }
+            }
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { resize_tx, .. } => {
                 let _ = resize_tx.send((rows, cols, cell_width_px, cell_height_px));
@@ -1629,6 +1649,7 @@ impl PaneRuntimeIo {
             PaneRuntimeIo::Actor(actor) => {
                 actor.nudge_child_redraw_after_handoff(rows, cols, cell_width_px, cell_height_px);
             }
+            PaneRuntimeIo::Core(_) => {}
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { .. } => {}
         }
@@ -1637,6 +1658,8 @@ impl PaneRuntimeIo {
     fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.try_write_user_input(bytes),
+            #[cfg(unix)]
+            PaneRuntimeIo::Core(core) => core.try_write_user_input(bytes),
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, .. } => sender.try_send(bytes),
         }
@@ -1645,6 +1668,12 @@ impl PaneRuntimeIo {
     fn write_terminal_response(&self, response: impl FnOnce() -> Option<Bytes>) {
         match self {
             PaneRuntimeIo::Actor(actor) => actor.write_terminal_response(response),
+            #[cfg(unix)]
+            PaneRuntimeIo::Core(core) => {
+                if let Some(bytes) = response() {
+                    core.write_terminal_response(bytes);
+                }
+            }
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, .. } => {
                 if let Some(bytes) = response() {
@@ -1670,6 +1699,24 @@ impl PaneRuntimeIo {
                     let _ = deadline;
                     actor.queue_user_input_submission(text, enter, delay)
                 }
+            }
+            #[cfg(unix)]
+            PaneRuntimeIo::Core(core) => {
+                let _ = deadline;
+                let core = core.clone();
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                crate::thread_spawn::spawn_named("core-attach-submit", move || {
+                    let result = core
+                        .try_write_user_input(text)
+                        .map_err(std::io::Error::other)
+                        .and_then(|()| {
+                            std::thread::sleep(delay);
+                            core.try_write_user_input(enter)
+                                .map_err(std::io::Error::other)
+                        });
+                    let _ = reply_tx.send(result);
+                })?;
+                Ok(reply_rx)
             }
             #[cfg(test)]
             PaneRuntimeIo::TestChannel { sender, .. } => {
@@ -3679,6 +3726,8 @@ impl PaneRuntime {
         match &self.io {
             #[cfg(unix)]
             PaneRuntimeIo::Actor(actor) => actor.validate_input_submission(bytes),
+            #[cfg(unix)]
+            PaneRuntimeIo::Core(_) => Ok(()),
             #[cfg(windows)]
             PaneRuntimeIo::Actor(_) => {
                 let _ = bytes;

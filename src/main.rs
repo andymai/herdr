@@ -21,8 +21,14 @@ mod cli;
 mod client;
 mod config;
 mod copy_mode;
+#[cfg(unix)]
+mod core_attach;
+#[cfg(unix)]
+mod core_mirror;
 mod detect;
 mod events;
+#[cfg(unix)]
+mod fork_update;
 use ghostty_vt as ghostty;
 mod handoff_runtime;
 mod input;
@@ -415,6 +421,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 [experimental]
 # Allow launching herdr from inside a herdr-managed pane.
 # allow_nested = false
+# Show the Herdr app's spaces, tabs and splits from herdr-core, with panes
+# attached to the app's terminals. Unix only.
+# core_mirror = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
 # While prefix mode is active, temporarily switch the host input source to
@@ -578,6 +587,8 @@ fn main() -> io::Result<()> {
     }
 
     if args.get(1).map(|s| s.as_str()) == Some("update") {
+        #[cfg(unix)]
+        fork_update::intercept_self_update(&args[2..]);
         let options = match update::parse_self_update_args(&args[2..]) {
             Ok(options) => options,
             Err(err) if err.starts_with("usage:") => {
