@@ -1,0 +1,20 @@
+.github/workflows/core-mirror-sync.yml
+  s_83fa79441b6b5c::t_63880d7ca18f92 139-145
+  s_83fa79441b6b5c::t_444f56daaf01cd 87-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d9fa5599d147ec66f0e48372584eaae86a620943",
+  "prompts": {},
+  "sessions": {
+    "s_83fa79441b6b5c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "401134dd-83e9-48f0-9e18-5438d0800438",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
