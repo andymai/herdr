@@ -84,6 +84,39 @@ jobs:
         with:
           version: ${{ steps.plan.outputs.zig }}
 
+      - name: Point Zig at a cacheable package folder
+        run: echo "ZIG_GLOBAL_CACHE_DIR=$RUNNER_TEMP/zig-global" >> "$GITHUB_ENV"
+
+      - name: Restore Zig packages
+        id: zig-packages
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-packages-${{ hashFiles('vendor/libghostty-vt/build.zig.zon') }}
+          restore-keys: zig-packages-
+
+      # translate-c comes only from codeberg.org, whose archive downloads can
+      # fail for hours while the rest of the site is up. The copies on this
+      # fork's zig-packages release stand in, and zig fetch checks each hash.
+      - name: Fetch Zig packages from the fork's mirror
+        if: steps.zig-packages.outputs.cache-hit != 'true'
+        working-directory: vendor/libghostty-vt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mirror="$RUNNER_TEMP/zig-mirror"
+          gh release download zig-packages --repo "$GH_REPO" --dir "$mirror" --pattern '*.tar.gz'
+          for file in "$mirror"/*.tar.gz; do
+            want=$(basename "$file" .tar.gz)
+            got=$(zig fetch "$file")
+            if [ "$got" != "$want" ]; then
+              echo "$file unpacks to $got, not $want"
+              exit 1
+            fi
+          done
+
       - name: Install Rust tools
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
@@ -102,6 +135,13 @@ jobs:
             git add docs/next/api/herdr-api.schema.json
             git commit -m "chore: regenerate the API schema"
           fi
+
+      - name: Save Zig packages
+        if: steps.zig-packages.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: ${{ steps.zig-packages.outputs.cache-primary-key }}
 
       - name: Check
         run: |
